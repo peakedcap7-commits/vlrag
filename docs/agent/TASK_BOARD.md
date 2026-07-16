@@ -8,17 +8,24 @@
 ## 当前任务
 
 - 任务：多 Agent 开发基础设施搭建。
-- 当前阶段：任务 5 共享记忆完成，待任务 6 验证。
+- 当前阶段：已完成。
 
 ## Agent 状态
 
 | Agent | 状态 | 当前任务 | 分支或 Worktree | 是否阻塞 |
 |---|---|---|---|---|
-| 主 Agent | 进行中 | 多 Agent 开发基础设施搭建 | feat/multi-agent-setup / D:\pj\vlrag\shopping-qna-worktrees\multi-agent-setup | 否 |
+| 主 Agent | 空闲 | 等待用户下达下一项开发任务 | main / D:\pj\vlrag\shopping-qna | 否 |
 
 ## 文件所有权
 
-当前没有专业 Agent 持有文件写入权。任务 6 为只读验证。
+当前没有专业 Agent 持有文件写入权。
+
+## 收尾状态
+
+- 功能分支已快进合并到 main。
+- 临时 Worktree 和功能分支已清理，仅保留稳定主 Workspace。
+- 父工作区 `.codex` Junction 已建立，指向本仓库的项目级配置。
+- Codex App 子 Agent 可见性验收已完成，详细记录见 `ACCEPTANCE.md`。
 
 ## 更新规则
 

@@ -53,6 +53,31 @@ class AgentMemoryTest(unittest.TestCase):
             with self.subTest(filename=filename):
                 self.assertIn("Neo4j 尚未接入", content)
 
+    def test_memory_records_completed_multi_agent_acceptance(self):
+        project_state = (MEMORY_DIR / "PROJECT_STATE.md").read_text(encoding="utf-8")
+        task_board = (MEMORY_DIR / "TASK_BOARD.md").read_text(encoding="utf-8")
+        acceptance = (MEMORY_DIR / "ACCEPTANCE.md").read_text(encoding="utf-8")
+
+        self.assertIn("Codex App 可见性验收：已完成", project_state)
+        self.assertIn("当前阶段：已完成", task_board)
+        self.assertNotIn("feat/multi-agent-setup", task_board)
+        self.assertIn("019f6a96-c116-7041-8d52-14b79acf3720", acceptance)
+
+    def test_architecture_records_current_dependency_exceptions(self):
+        architecture = (MEMORY_DIR / "ARCHITECTURE.md").read_text(encoding="utf-8")
+
+        for dependency in (
+            "chatbot → llm",
+            "chatbot → vectordb",
+            "chatbot → Chroma",
+            "retrievers → llm",
+            "retrievers → embeddings",
+        ):
+            with self.subTest(dependency=dependency):
+                self.assertIn(dependency, architecture)
+        self.assertIn("cli 与 chatbot.chain 共同承担对象组装", architecture)
+        self.assertIn("chatbot.chain 与 retrievers 均直接依赖 Chroma", architecture)
+
 
 if __name__ == "__main__":
     unittest.main()

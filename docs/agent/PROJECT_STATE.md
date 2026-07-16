@@ -26,10 +26,17 @@
 - src/chatbot/：提示词、历史和问答链。
 - src/cli.py：命令行入口和对象组装。
 
+## 多 Agent 开发状态
+
+- Codex App 可见性验收：已完成。
+- 项目级配置位于 `.codex/config.toml` 和 `.codex/agents/*.toml`，共七个专业 Agent。
+- Codex App 保存的父工作区为 `D:\pj\vlrag`；父目录 `.codex` 是指向本仓库 `.codex` 的 Junction，仅用于项目配置发现。
+- App 验收中已同时出现 `/root/architect` 与 `/root/reviewer` 两个独立子 Agent 活动节点，且二者均未继续派生。
+
 ## 当前限制
 
 - 尚未形成正式前端目录。
 - 关系型数据库表结构尚未引入。
 - Chroma 数据和处理后数据属于本地产物，不进入 Git。
 - 现有部分测试依赖 DashScope、LangChain、OpenCLIP 及有效 API Key，纯配置测试必须使用 Python 标准库独立运行。
-- 多 Agent 配置建立后仍需要在 Codex App 中进行一次真实子 Agent 可见性验收。
+- backend 与 frontend 配置中的 `karpathy-guidelines` 使用当前开发机绝对路径；迁移到其他机器时需要调整该路径。

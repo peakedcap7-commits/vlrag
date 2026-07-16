@@ -8,14 +8,27 @@
 ## 当前依赖方向
 
 ```text
-cli / chatbot
-      ↓
-retrievers
-      ↓
-vectordb / embeddings
-      ↓
-DashScope / OpenCLIP / Chroma
+cli
+├── data
+├── vectordb ──→ embeddings ──→ DashScope / OpenCLIP
+└── chatbot
+    ├── llm ──→ DashScope
+    ├── vectordb ──→ Chroma
+    ├── Chroma
+    └── retrievers
+        ├── llm
+        ├── embeddings
+        └── Chroma
 ```
+
+当前代码中的直接依赖包括：
+
+- `chatbot → llm`：`ShoppingChatbot` 创建生成模型客户端。
+- `chatbot → vectordb`：切换到图像或混合模式时延迟加载图片向量库。
+- `chatbot → Chroma`：`ShoppingChatbot` 的构造参数和成员直接使用 Chroma 具体类型。
+- `retrievers → llm`：文本检索器用视觉模型把图片描述成文本。
+- `retrievers → embeddings`：多模态检索器直接使用 OpenCLIP 编码查询。
+- `vectordb → embeddings`：向量库存取模块负责选择对应的嵌入实现。
 
 数据准备链路：
 
@@ -38,11 +51,17 @@ llm
 - data 只负责数据读取、转换和增强。
 - embeddings 只负责把文本或图片转换为向量。
 - vectordb 只负责向量存储的建立和读取。
-- retrievers 负责召回、结果模型和融合。
+- retrievers 负责召回、结果模型和融合；当前还直接依赖 Chroma 具体类型。
 - graph 只定义图实体、关系和检索接口，当前不提供实际图数据召回。
 - llm 负责模型客户端和模型配置。
-- chatbot 负责会话编排、提示词和历史。
-- cli 负责用户入口和对象组装。
+- chatbot 负责会话编排、提示词、历史，并延迟组装 LLM、检索器和图片向量库；当前直接使用 Chroma 具体类型。
+- cli 负责用户入口，加载文本向量库和增强数据，并创建 `ShoppingChatbot`。
+
+## 当前边界例外
+
+- cli 与 chatbot.chain 共同承担对象组装：cli 组装启动必需对象，chatbot.chain 组装按模式延迟加载的对象。
+- chatbot.chain 与 retrievers 均直接依赖 Chroma，而不是只依赖 vectordb 边界；这是当前实现事实和后续可评估的解耦点，不在本次多 Agent 基础设施任务中重构。
+- 当前扫描未发现循环依赖，也未发现底层模块反向依赖 cli 或 chatbot。
 
 ## 结构变更规则
 
