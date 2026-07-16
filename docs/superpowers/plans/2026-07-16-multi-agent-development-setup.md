@@ -228,10 +228,16 @@ Expected：1 个测试通过。
 Run:
 
 ~~~powershell
-codex --strict-config -C . features list
+$json = codex --strict-config -C . doctor --json 2>$null
+$report = $json | ConvertFrom-Json
+$configCheck = $report.checks.'config.load'
+if ($configCheck.status -ne 'ok' -or $configCheck.details.'config.toml parse' -ne 'ok') {
+    throw "Codex 项目配置严格解析失败"
+}
+Write-Output "Codex 项目配置解析通过"
 ~~~
 
-Expected：退出码为 0，没有 unknown field 或 TOML parse error。
+Expected：输出“Codex 项目配置解析通过”；只有 `config.load` 和 `config.toml parse` 均为 `ok` 时通过。
 
 - [ ] **Step 6：提交全局配置**
 
@@ -508,10 +514,16 @@ Expected：5 个测试全部通过。
 Run:
 
 ~~~powershell
-codex --strict-config -C . features list
+$json = codex --strict-config -C . doctor --json 2>$null
+$report = $json | ConvertFrom-Json
+$configCheck = $report.checks.'config.load'
+if ($configCheck.status -ne 'ok' -or $configCheck.details.'config.toml parse' -ne 'ok') {
+    throw "Codex 项目配置严格解析失败"
+}
+Write-Output "Codex 项目配置解析通过"
 ~~~
 
-Expected：退出码为 0，没有无效字段或 TOML 解析错误。
+Expected：输出“Codex 项目配置解析通过”；只有 `config.load` 和 `config.toml parse` 均为 `ok` 时通过。
 
 - [ ] **Step 12：提交专业 Agent**
 
@@ -1159,10 +1171,16 @@ Run:
 
 ~~~powershell
 codex doctor --summary --no-color
-codex --strict-config -C . features list
+$json = codex --strict-config -C . doctor --json 2>$null
+$report = $json | ConvertFrom-Json
+$configCheck = $report.checks.'config.load'
+if ($configCheck.status -ne 'ok' -or $configCheck.details.'config.toml parse' -ne 'ok') {
+    throw "Codex 项目配置严格解析失败"
+}
+Write-Output "Codex 项目配置解析通过"
 ~~~
 
-Expected：没有项目 TOML 解析错误、未知字段或 Agent 配置错误。与本任务无关的可选连接器警告单独记录，不作为失败依据。
+Expected：配置门禁只以 `config.load` 和 `config.toml parse` 均为 `ok` 为准，并输出“Codex 项目配置解析通过”。终端环境检查可以独立失败，不影响项目配置有效性；相关警告单独记录。
 
 - [ ] **Step 3：验证临时 Worktree**
 
