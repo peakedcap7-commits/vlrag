@@ -55,10 +55,20 @@ class CustomAgentsTest(unittest.TestCase):
                 )
                 self.assertIn("karpathy-guidelines", config["developer_instructions"])
 
-    def test_read_only_agents_forbid_modifications(self) -> None:
-        for name in ("reviewer", "acceptance"):
+    def test_agent_write_boundaries_are_protected(self) -> None:
+        expected_boundaries = {
+            "reviewer": "不得修改",
+            "acceptance": "不得修改",
+            "architect": "结构变更已获用户批准",
+            "database": "数据库变更已获用户批准",
+            "tester": "只允许修改 tests/",
+        }
+
+        for name, expected_boundary in expected_boundaries.items():
             with self.subTest(agent=name):
-                self.assertIn("不得修改", load_agent(name)["developer_instructions"])
+                self.assertIn(
+                    expected_boundary, load_agent(name)["developer_instructions"]
+                )
 
 
 if __name__ == "__main__":
