@@ -1,0 +1,30 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+.pytest_cache/
+
+# 环境变量
+.env
+
+# Chroma 向量库
+chroma_data/
+
+# 数据
+data/raw/
+data/processed/
+
+# 文档渲染产物
+_docx_render/
+
+# Notebooks
+.ipynb_checkpoints/
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
