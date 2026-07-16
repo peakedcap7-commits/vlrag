@@ -7,17 +7,18 @@
 
 ## 当前任务
 
-暂无进行中的功能开发任务。
+- 任务：多 Agent 开发基础设施搭建。
+- 当前阶段：任务 5 共享记忆完成，待任务 6 验证。
 
 ## Agent 状态
 
 | Agent | 状态 | 当前任务 | 分支或 Worktree | 是否阻塞 |
 |---|---|---|---|---|
-| 主 Agent | 空闲 | 等待用户需求 | main | 否 |
+| 主 Agent | 进行中 | 多 Agent 开发基础设施搭建 | feat/multi-agent-setup / D:\pj\vlrag\shopping-qna-worktrees\multi-agent-setup | 否 |
 
 ## 文件所有权
 
-当前没有专业 Agent 持有文件写入权。
+当前没有专业 Agent 持有文件写入权。任务 6 为只读验证。
 
 ## 更新规则
 

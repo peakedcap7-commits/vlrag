@@ -1,3 +1,4 @@
+import re
 import unittest
 from pathlib import Path
 
@@ -32,17 +33,25 @@ class AgentMemoryTest(unittest.TestCase):
                 with self.subTest(filename=filename, field=field):
                     self.assertIn(field, content)
 
-    def test_decisions_include_initial_records(self):
+    def test_decisions_match_approved_records(self):
         content = (MEMORY_DIR / "DECISIONS.md").read_text(encoding="utf-8")
-        for decision_id in ("DEC-001", "DEC-002", "DEC-003", "DEC-004"):
-            with self.subTest(decision_id=decision_id):
-                self.assertIn(decision_id, content)
+        decision_ids = set(re.findall(r"^##\s+(DEC-\d{3})\b", content, re.MULTILINE))
+        self.assertEqual(decision_ids, {"DEC-001", "DEC-002", "DEC-003", "DEC-004"})
 
-    def test_project_state_records_current_constraints(self):
-        content = (MEMORY_DIR / "PROJECT_STATE.md").read_text(encoding="utf-8")
-        for expected_text in ("Chroma", "Neo4j", "尚未形成正式前端目录"):
-            with self.subTest(expected_text=expected_text):
-                self.assertIn(expected_text, content)
+    def test_memory_records_current_project_constraints(self):
+        project_state = (MEMORY_DIR / "PROJECT_STATE.md").read_text(encoding="utf-8")
+        architecture = (MEMORY_DIR / "ARCHITECTURE.md").read_text(encoding="utf-8")
+        database = (MEMORY_DIR / "DATABASE.md").read_text(encoding="utf-8")
+
+        self.assertIn("Chroma", project_state)
+        self.assertIn("尚未形成正式前端目录", project_state)
+        for filename, content in (
+            ("PROJECT_STATE.md", project_state),
+            ("ARCHITECTURE.md", architecture),
+            ("DATABASE.md", database),
+        ):
+            with self.subTest(filename=filename):
+                self.assertIn("Neo4j 尚未接入", content)
 
 
 if __name__ == "__main__":

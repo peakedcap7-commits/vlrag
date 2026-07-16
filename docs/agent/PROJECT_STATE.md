@@ -12,7 +12,7 @@
 - LangChain
 - Chroma 本地向量库
 - OpenCLIP 图文向量
-- Neo4j 图检索接口
+- 图检索抽象接口（Neo4j 二期占位）
 - pytest 测试代码
 
 ## 已有模块
@@ -21,7 +21,7 @@
 - src/embeddings/：文本和图文 Embedding。
 - src/vectordb/：文本及图片向量库。
 - src/retrievers/：文本、多模态和混合检索。
-- src/graph/：图关系抽象和 Neo4j 检索。
+- src/graph/：仅有图检索抽象、DummyGraphRetriever 空实现和 Neo4j 二期占位；Neo4j 尚未接入。
 - src/llm/：百炼模型客户端。
 - src/chatbot/：提示词、历史和问答链。
 - src/cli.py：命令行入口和对象组装。

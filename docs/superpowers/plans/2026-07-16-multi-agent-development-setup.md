@@ -815,8 +815,9 @@ git commit -m "docs: define main agent policy"
 创建 tests/test_agent_memory.py：
 
 ~~~python
-from pathlib import Path
+import re
 import unittest
+from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -845,17 +846,25 @@ class TestAgentMemory(unittest.TestCase):
                 self.assertIn("- 维护者：", content)
                 self.assertIn("- 状态：", content)
 
-    def test_decisions_contain_approved_architecture_choices(self):
+    def test_decisions_contain_only_approved_architecture_choices(self):
         content = (MEMORY_DIR / "DECISIONS.md").read_text(encoding="utf-8")
-        for decision in ("DEC-001", "DEC-002", "DEC-003", "DEC-004"):
-            with self.subTest(decision=decision):
-                self.assertIn(decision, content)
+        decision_ids = set(re.findall(r"^##\s+(DEC-\d{3})\b", content, re.MULTILINE))
+        self.assertEqual(decision_ids, {"DEC-001", "DEC-002", "DEC-003", "DEC-004"})
 
-    def test_project_state_matches_current_storage(self):
-        content = (MEMORY_DIR / "PROJECT_STATE.md").read_text(encoding="utf-8")
-        self.assertIn("Chroma", content)
-        self.assertIn("Neo4j", content)
-        self.assertIn("尚未形成正式前端目录", content)
+    def test_memory_matches_current_project_constraints(self):
+        project_state = (MEMORY_DIR / "PROJECT_STATE.md").read_text(encoding="utf-8")
+        architecture = (MEMORY_DIR / "ARCHITECTURE.md").read_text(encoding="utf-8")
+        database = (MEMORY_DIR / "DATABASE.md").read_text(encoding="utf-8")
+
+        self.assertIn("Chroma", project_state)
+        self.assertIn("尚未形成正式前端目录", project_state)
+        for name, content in (
+            ("PROJECT_STATE.md", project_state),
+            ("ARCHITECTURE.md", architecture),
+            ("DATABASE.md", database),
+        ):
+            with self.subTest(file=name):
+                self.assertIn("Neo4j 尚未接入", content)
 
 
 if __name__ == "__main__":
@@ -891,7 +900,7 @@ Expected：FAIL，因为 docs/agent/ 尚未包含六个权威记忆文件。
 - LangChain
 - Chroma 本地向量库
 - OpenCLIP 图文向量
-- Neo4j 图检索接口
+- 图检索抽象接口（Neo4j 二期占位）
 - pytest 测试代码
 
 ## 已有模块
@@ -900,7 +909,7 @@ Expected：FAIL，因为 docs/agent/ 尚未包含六个权威记忆文件。
 - src/embeddings/：文本和图文 Embedding。
 - src/vectordb/：文本及图片向量库。
 - src/retrievers/：文本、多模态和混合检索。
-- src/graph/：图关系抽象和 Neo4j 检索。
+- src/graph/：仅有图检索抽象、DummyGraphRetriever 空实现和 Neo4j 二期占位；Neo4j 尚未接入。
 - src/llm/：百炼模型客户端。
 - src/chatbot/：提示词、历史和问答链。
 - src/cli.py：命令行入口。
@@ -933,9 +942,9 @@ cli / chatbot
       ↓
 retrievers
       ↓
-vectordb / embeddings / graph
+vectordb / embeddings
       ↓
-外部模型、Chroma、Neo4j
+DashScope / OpenCLIP / Chroma
 ~~~
 
 数据准备链路：
@@ -948,13 +957,19 @@ data
 llm
 ~~~
 
+图检索预留：
+
+- graph 是独立预留接口，不在当前检索主链。
+- DummyGraphRetriever 当前为空实现，所有方法返回空列表。
+- Neo4jRetriever 是二期 TODO 占位；Neo4j 尚未接入。
+
 ## 模块职责
 
 - data 只负责数据读取、转换和增强。
 - embeddings 只负责把文本或图片转换为向量。
 - vectordb 只负责向量存储的建立和读取。
 - retrievers 负责召回、结果模型和融合。
-- graph 负责图实体、关系和图检索。
+- graph 只定义图实体、关系和检索接口，当前不提供实际图数据召回。
 - llm 负责模型客户端和模型配置。
 - chatbot 负责会话编排、提示词和历史。
 - cli 负责用户入口和对象组装。
@@ -983,8 +998,11 @@ llm
 ## 当前存储
 
 - Chroma：保存文本向量和图片向量索引，本地目录为 chroma_data/。
-- Neo4j：通过 src/graph/ 下的抽象表达商品和搭配关系。
 - JSON：data/processed/ 保存处理后的商品数据，本地生成，不进入 Git。
+
+## 未接入存储
+
+- Neo4j 尚未接入，不是当前存储；src/graph/ 仅有抽象、返回空列表的 Dummy 实现和二期 TODO 占位。
 - 关系型数据库：当前尚未引入，因此不存在已批准的业务表结构。
 
 ## 设计原则
@@ -1056,17 +1074,18 @@ llm
 
 ## 当前任务
 
-暂无进行中的功能开发任务。
+- 任务：多 Agent 开发基础设施搭建。
+- 当前阶段：任务 5 共享记忆完成，待任务 6 验证。
 
 ## Agent 状态
 
 | Agent | 状态 | 当前任务 | 分支或 Worktree | 是否阻塞 |
 |---|---|---|---|---|
-| 主 Agent | 空闲 | 等待用户需求 | main | 否 |
+| 主 Agent | 进行中 | 多 Agent 开发基础设施搭建 | feat/multi-agent-setup / D:\pj\vlrag\shopping-qna-worktrees\multi-agent-setup | 否 |
 
 ## 文件所有权
 
-当前没有专业 Agent 持有文件写入权。
+当前没有专业 Agent 持有文件写入权。任务 6 为只读验证。
 
 ## 更新规则
 

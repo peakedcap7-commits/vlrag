@@ -12,9 +12,9 @@ cli / chatbot
       ↓
 retrievers
       ↓
-vectordb / embeddings / graph
+vectordb / embeddings
       ↓
-外部模型、Chroma、Neo4j
+DashScope / OpenCLIP / Chroma
 ```
 
 数据准备链路：
@@ -27,13 +27,19 @@ data
 llm
 ```
 
+图检索预留：
+
+- graph 是独立预留接口，不在当前检索主链。
+- DummyGraphRetriever 当前为空实现，所有方法返回空列表。
+- Neo4jRetriever 是二期 TODO 占位；Neo4j 尚未接入。
+
 ## 模块职责
 
 - data 只负责数据读取、转换和增强。
 - embeddings 只负责把文本或图片转换为向量。
 - vectordb 只负责向量存储的建立和读取。
 - retrievers 负责召回、结果模型和融合。
-- graph 负责图实体、关系和图检索。
+- graph 只定义图实体、关系和检索接口，当前不提供实际图数据召回。
 - llm 负责模型客户端和模型配置。
 - chatbot 负责会话编排、提示词和历史。
 - cli 负责用户入口和对象组装。
