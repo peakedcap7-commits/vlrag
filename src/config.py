@@ -5,6 +5,17 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
+
+def _parse_bool_env(name, default="false"):
+    """严格解析布尔环境变量。"""
+    value = os.getenv(name, default).strip().lower()
+    if value == "true":
+        return True
+    if value == "false":
+        return False
+    raise ValueError(f"{name} 必须为 true 或 false")
+
+
 # ===== 百炼 API 配置 =====
 DASHSCOPE_API_KEY = os.getenv("DASHSCOPE_API_KEY")
 DASHSCOPE_BASE_URL = "https://dashscope.aliyuncs.com/compatible-mode/v1"
@@ -15,14 +26,24 @@ QWEN_MAX = "qwen-max"                    # 最强文本对话
 QWEN_TURBO = "qwen-turbo"                # 轻量文本（替代 GPT-4o-mini）
 TEXT_EMBEDDING_V3 = "text-embedding-v3"  # 文本嵌入（替代 Ada-002）
 
-# ===== OpenCLIP 配置（本地，不变） =====
-CLIP_MODEL = "ViT-B-32"
-CLIP_CHECKPOINT = "metaclip_fullcc"
+# ===== Chinese-CLIP 配置（本地） =====
+CHINESE_CLIP_MODEL = os.getenv(
+    "CHINESE_CLIP_MODEL",
+    "OFA-Sys/chinese-clip-vit-base-patch16",
+)
+CHINESE_CLIP_EMBEDDING_DIM = 512
 
 # ===== 检索配置 =====
 RETRIEVER_K = 5
 RERANK_TOP_K = 5
 CHROMA_PERSIST_DIR = "./chroma_data"
+
+# ===== MinIO 配置 =====
+MINIO_ENDPOINT = os.getenv("MINIO_ENDPOINT", "localhost:9000")
+MINIO_ACCESS_KEY = os.getenv("MINIO_ACCESS_KEY")
+MINIO_SECRET_KEY = os.getenv("MINIO_SECRET_KEY")
+MINIO_SECURE = _parse_bool_env("MINIO_SECURE")
+MINIO_BUCKET = os.getenv("MINIO_BUCKET", "shopping-qna")
 
 # ===== 数据配置 =====
 DATASET_NAME = "hahminlew/kream-product-blip-captions"
