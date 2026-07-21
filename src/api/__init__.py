@@ -1,0 +1,1 @@
+"""ShoppingQnA HTTP API。"""
