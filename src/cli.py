@@ -27,10 +27,10 @@ def main():
         print("增强数据不存在，请先运行 M2 数据增强")
         sys.exit(1)
 
-    # 纯文本启动，不加载 OpenCLIP
+    # 纯文本启动，不加载 Chinese-CLIP
     chatbot = ShoppingChatbot(text_db=text_db, products=products)
 
-    print(f"\n当前检索器: text（纯文本模式，OpenCLIP 未加载）")
+    print("\n当前检索器: text（纯文本模式，Chinese-CLIP 未加载）")
     print("上传图片时会自动切换 multimodal/hybrid")
     print("命令: /quit\n")
 

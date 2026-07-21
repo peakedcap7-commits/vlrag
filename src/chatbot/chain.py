@@ -18,7 +18,7 @@ class ShoppingChatbot:
     支持三种检索模式切换 + 多轮对话 + 文本/图片查询。
 
     检索器懒加载：只实例化当前模式的检索器，
-    避免一次加载全部（尤其是 OpenCLIP 只在使用 hybrid/multimodal 时才加载）。
+    避免一次加载全部（尤其是 Chinese-CLIP 只在使用 hybrid/multimodal 时才加载）。
     """
 
     def __init__(
@@ -32,7 +32,7 @@ class ShoppingChatbot:
         self.products = products
 
         self._retriever: BaseRetriever | None = None
-        self._retriever_type = "text"  # 默认纯文本，不加载 OpenCLIP
+        self._retriever_type = "text"  # 默认纯文本，不加载 Chinese-CLIP
         self._llm = build_chat_llm(model=QWEN_MAX, temperature=0.7)
         self._conversation = ConversationManager()
 
@@ -48,7 +48,7 @@ class ShoppingChatbot:
         if self._image_db is None:
             from src.vectordb.image_store import load_image_store
             self._image_db = load_image_store()
-            print("OpenCLIP 模型已加载")
+            print("Chinese-CLIP 图片向量库已加载")
 
     def _build_retriever(self, rtype: RetrieverType) -> BaseRetriever:
         if rtype == "multimodal":
@@ -74,7 +74,7 @@ class ShoppingChatbot:
     def chat(self, query: str, img_b64: str = "") -> str:
         """
         对话入口，按输入自动选择检索器：
-        - 纯文本     → text 检索器（v3 原生中文，不加载 OpenCLIP）
+        - 纯文本     → text 检索器（v3 原生中文，不加载 Chinese-CLIP）
         - 上传图片   → multimodal 检索器（CLIP 图片编码）
         - 图文都有   → hybrid 检索器（双路 RRF 融合）
         """

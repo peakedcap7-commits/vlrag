@@ -14,11 +14,11 @@ RRF_K = 60
 class HybridRetriever(BaseRetriever):
     """
     混合检索器：
-    1. 双路并行检索：图片路（OpenCLIP）+ 文本路（text-embedding-v3）
+    1. 双路并行检索：图片路（Chinese-CLIP）+ 文本路（text-embedding-v3）
     2. RRF（Reciprocal Rank Fusion）融合排序，零 API 成本
     3. 取 Top-K 返回
 
-    子检索器懒加载，避免不使用 Hybrid 时加载 OpenCLIP。
+    子检索器懒加载，避免不使用 Hybrid 时加载 Chinese-CLIP。
     """
 
     def __init__(
@@ -80,7 +80,7 @@ class HybridRetriever(BaseRetriever):
         RRF 融合两条检索结果，零 API 成本。
         对每条结果按其在各路的排名计算 RRF 分数，合并后按分数降序排列。
         """
-        rrf_scores: dict[int, float] = {}
+        rrf_scores: dict[int | str, float] = {}
 
         # 图片路 → RRF 分数累加
         for rank, item in enumerate(items_a, start=1):
@@ -91,7 +91,7 @@ class HybridRetriever(BaseRetriever):
             rrf_scores[item.product_id] = rrf_scores.get(item.product_id, 0) + 1 / (RRF_K + rank)
 
         # 构建结果列表
-        id_to_item: dict[int, ItemWrapper] = {}
+        id_to_item: dict[int | str, ItemWrapper] = {}
         for item in items_a + items_b:
             if item.product_id not in id_to_item:
                 item.source = "hybrid"

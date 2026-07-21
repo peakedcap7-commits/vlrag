@@ -6,7 +6,7 @@ from typing import List, Optional
 @dataclass
 class ItemWrapper:
     """商品包装器，统一检索结果格式"""
-    product_id: int
+    product_id: int | str
     name: str
     type: str
     description: str = ""
@@ -29,22 +29,40 @@ class ItemWrapper:
 
 
 def fetch_products(
-    product_ids: List[int],
+    product_ids: List[int | str],
     products: List[dict],
 ) -> List[ItemWrapper]:
-    """根据 product_id 列表获取完整商品信息"""
+    """按 item_id 或旧列表索引获取完整商品信息。"""
+    products_by_item_id = {
+        str(product["item_id"]): product
+        for product in products
+        if product.get("item_id") is not None
+    }
     results = []
     for pid in product_ids:
-        if 0 <= pid < len(products):
-            p = products[pid]
-            results.append(ItemWrapper(
-                product_id=pid,
-                name=p.get("name", ""),
-                type=p.get("type", ""),
-                description=p.get("description", ""),
-                image_summary=p.get("image_summary", ""),
-                summary=p.get("summary", ""),
-                tags=p.get("tags", []),
-                image_path=p.get("image_path"),
-            ))
+        product = products_by_item_id.get(str(pid))
+        if product is None and isinstance(pid, int) and 0 <= pid < len(products):
+            product = products[pid]
+        if product is None:
+            continue
+        product_id = product.get("item_id", pid)
+        retrieval_text = product.get("retrieval_text", "")
+        tags = product.get("tags") or [
+            *product.get("colors", []),
+            *product.get("style", []),
+        ]
+        results.append(ItemWrapper(
+            product_id=str(product_id) if product.get("item_id") is not None else product_id,
+            name=product.get("name") or retrieval_text,
+            type=(
+                product.get("type")
+                or product.get("sub_category")
+                or product.get("category", "")
+            ),
+            description=product.get("description") or retrieval_text,
+            image_summary=product.get("image_summary", ""),
+            summary=product.get("summary", ""),
+            tags=tags,
+            image_path=product.get("image_path"),
+        ))
     return results
