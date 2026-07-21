@@ -82,6 +82,9 @@ backend 和 frontend 开发前必须读取并使用 karpathy-guidelines：
 - ACCEPTANCE.md 保存可验证的验收标准。
 专业 Agent 只能提出记忆更新建议。主 Agent 核对代码、测试或用户决定后再合并为项目事实。
 
+## 会话桥接(claude-bridge)
+Claude Code 侧主 Agent 汇总专业 Agent 结果后,按 `C:/Users/Administrator/Documents/Codex/claude-bridge/PROTOCOL.md` 写入桥接文件,供 Codex 会话只读观察。只有主 Agent 写 bridge,专业 Agent 不直接写。bridge 只承载结构化摘要,不承载原始逐字会话;长期事实仍以 `docs/agent/` 为准。
+
 ## 文件所有权
 - 同一文件同一时间只能有一个写入所有者。
 - backend 不修改前端和数据库迁移。
