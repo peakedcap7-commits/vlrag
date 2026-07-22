@@ -436,8 +436,8 @@ class PolyvoreDualRetrievalTest(unittest.TestCase):
             },
         )
 
-    def test_旧_cli_入口仍可导入(self):
-        module = import_required("src.cli_polyvore_retrieval")
+    def test_tools_cli_入口可导入(self):
+        module = import_required("tools.cli_polyvore_retrieval")
 
         self.assertTrue(callable(module.main))
 

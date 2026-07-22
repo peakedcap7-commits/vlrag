@@ -1,6 +1,6 @@
 # ShoppingQnA 架构边界
 
-- 最后更新时间：2026-07-20
+- 最后更新时间：2026-07-22
 - 对应提交：以当前 Git HEAD 为准
 - 维护者：主 Agent，architect 负责评审
 - 状态：已生效
@@ -25,7 +25,7 @@ cli
 独立 FastAPI 推荐入口：
 
 ```text
-api ──→ polyvore_recommend_service ←── cli_polyvore_recommend
+api ──→ polyvore_recommend_service ←── tools.cli_polyvore_recommend
               ├── polyvore_retrieval
               ├── polyvore_recommend
               ├── graph
@@ -71,15 +71,16 @@ llm
 - cli 负责用户入口，加载文本向量库和增强数据，并创建 `ShoppingChatbot`。
 - api 只负责 HTTP schema、参数校验、路由和生命周期，通过共享 service 调用推荐能力。
 - polyvore_recommend_service 负责 CLI/API 共用的 Chroma、Embedding、outfit 索引和 resolver 一次性组装，并提供推荐用例接口。
+- tools 只负责开发、建库和 smoke 命令入口，单向依赖 src 中的 service、graph、vectordb、embeddings 和 data；src 生产模块不得反向依赖 tools。
 
 ## 当前边界例外
 
 - cli 与 chatbot.chain 共同承担对象组装：cli 组装启动必需对象，chatbot.chain 组装按模式延迟加载的对象。
 - chatbot.chain 与 retrievers 均直接依赖 Chroma，而不是只依赖 vectordb 边界；这是当前实现事实和后续可评估的解耦点，不在本次多 Agent 基础设施任务中重构。
-- Polyvore 小样本文本 collection 为 `products_text_v3_v1`，图片 collection 为 `products_image_cnclip_v1`；两者使用同一组字符串 `item_id`。独立 `cli_polyvore_retrieval` 使用两种查询向量与只读增强 JSONL 的本地 BM25，按 `item_id` 执行三路 RRF 后，再以同一增强 metadata 做轻量规则加权 smoke；材质字段不参与规则，旧 `products_text` 消费入口和现有 `HybridRetriever` 均保持不变。
-- 独立 `cli_polyvore_recommend` 仅通过共享 `polyvore_recommend_service` 间接调用 `polyvore_retrieval` 的检索能力与 `graph.polyvore_outfit_graph` 的共现查询，不直接依赖 `cli_polyvore_retrieval`；它只负责参数解析、组装 service 和结果输出，不修改检索排序或图共现排序，不进入 Chatbot 主链。
+- Polyvore 小样本文本 collection 为 `products_text_v3_v1`，图片 collection 为 `products_image_cnclip_v1`；两者使用同一组字符串 `item_id`。独立 `tools.cli_polyvore_retrieval` 使用两种查询向量与只读增强 JSONL 的本地 BM25，按 `item_id` 执行三路 RRF 后，再以同一增强 metadata 做轻量规则加权 smoke；材质字段不参与规则，旧 `products_text` 消费入口和现有 `HybridRetriever` 均保持不变。
+- 独立 `tools.cli_polyvore_recommend` 仅通过共享 `polyvore_recommend_service` 间接调用 `polyvore_retrieval` 的检索能力与 `graph.polyvore_outfit_graph` 的共现查询，不直接依赖 `tools.cli_polyvore_retrieval`；它只负责参数解析、组装 service 和结果输出，不修改检索排序或图共现排序，不进入 Chatbot 主链。
 - `polyvore_recommend_service` 负责从 `data.polyvore_item_resolver` 组装只读 resolver，并注入纯推荐编排层；resolver 仅装饰最终输出，不参与检索、规则加权或共现排序，`data` 不反向依赖推荐模块。
-- FastAPI 封装后，`cli_polyvore_recommend` 与 `api` 均只依赖共享 `polyvore_recommend_service`；纯检索逻辑已从 CLI 机械迁移到 `polyvore_retrieval`，API 不依赖任何 `cli_*` 模块。`src/api/` 当前仅含 app 与 schemas，不继续拆分 routers/dependencies 等目录。
+- FastAPI 封装后，`tools.cli_polyvore_recommend` 与 `api` 均只依赖共享 `polyvore_recommend_service`；纯检索逻辑位于 `polyvore_retrieval`，API 不依赖任何 tools 或 `cli_*` 模块。`src/api/` 当前仅含 app 与 schemas，不继续拆分 routers/dependencies 等目录。
 - 当前扫描未发现循环依赖，也未发现底层模块反向依赖 cli 或 chatbot。
 
 ## 结构变更规则

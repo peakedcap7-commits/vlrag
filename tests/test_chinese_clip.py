@@ -250,7 +250,7 @@ class ChineseCLIPIndexCliTest(unittest.TestCase):
         )
         fake_embeddings_module = types.ModuleType("src.embeddings.chinese_clip")
         fake_embeddings_module.ChineseCLIPEmbeddings = MagicMock
-        sys.modules.pop("src.cli_cnclip_index", None)
+        sys.modules.pop("tools.cli_cnclip_index", None)
         with patch.dict(
             sys.modules,
             {
@@ -258,7 +258,7 @@ class ChineseCLIPIndexCliTest(unittest.TestCase):
                 "src.embeddings.chinese_clip": fake_embeddings_module,
             },
         ):
-            cli_module = importlib.import_module("src.cli_cnclip_index")
+            cli_module = importlib.import_module("tools.cli_cnclip_index")
 
         records = [
             {

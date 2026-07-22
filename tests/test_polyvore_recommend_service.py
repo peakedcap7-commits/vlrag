@@ -82,7 +82,7 @@ class PolyvoreRecommendServiceTest(unittest.TestCase):
     def test_api_与_cli_共同从_service模块导入_builder(self):
         project_root = Path(__file__).resolve().parents[1]
         api_path = project_root / "src/api/app.py"
-        cli_path = project_root / "src/cli_polyvore_recommend.py"
+        cli_path = project_root / "tools/cli_polyvore_recommend.py"
         self.assertTrue(api_path.exists(), "缺少 API app 模块")
 
         def imported_names(path):

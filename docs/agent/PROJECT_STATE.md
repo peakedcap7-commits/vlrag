@@ -1,6 +1,6 @@
 # ShoppingQnA 当前项目状态
 
-- 最后更新时间：2026-07-21
+- 最后更新时间：2026-07-22
 - 对应提交：以当前 Git HEAD 为准
 - 维护者：主 Agent
 - 状态：已生效
@@ -27,6 +27,7 @@
 - src/chatbot/：提示词、历史和问答链。
 - src/api/：仅负责 FastAPI schema、HTTP 路由和应用生命周期，不包含检索或图关系算法。
 - src/cli.py：命令行入口和对象组装。
+- tools/：开发、建库和 smoke 命令入口；只依赖 src 生产模块，生产模块不得反向依赖 tools。
 
 ## 多 Agent 开发状态
 
@@ -43,11 +44,16 @@
 - 关系型数据库表结构尚未引入。
 - Chroma 数据和处理后数据属于本地产物，不进入 Git。
 - Polyvore 五条小样本已同时写入 `products_image_cnclip_v1` 和 `products_text_v3_v1`，两者使用相同字符串 `item_id`。
-- `src/cli_polyvore_retrieval.py` 已提供 text-embedding-v3、Chinese-CLIP 文本搜图与本地 BM25 三路查询，并按 `item_id` 去重执行 RRF 融合；融合后使用增强 JSONL 中的颜色、类别、风格、细节和场景做轻量规则加权 smoke，明确不使用材质字段，也不接管现有 Chatbot 检索主链。
-- `src/cli_polyvore_outfit.py` 可只读解析 Polyvore `valid.json`，通过进程内双向索引查询同 outfit 共现候选；不写缓存、不接 Neo4j，也不接管现有 Chatbot 检索主链。
-- `src/cli_polyvore_recommend.py` 已将独立三路检索 Top1 与 outfit 共现索引串联为“中文查询 → 锚点商品 → 搭配候选”smoke；只做顺序编排，不重新打分，也不接管现有 Chatbot 检索主链。
+- `tools/cli_polyvore_retrieval.py` 已提供 text-embedding-v3、Chinese-CLIP 文本搜图与本地 BM25 三路查询，并按 `item_id` 去重执行 RRF 融合；融合后使用增强 JSONL 中的颜色、类别、风格、细节和场景做轻量规则加权 smoke，明确不使用材质字段，也不接管现有 Chatbot 检索主链。
+- `tools/cli_polyvore_outfit.py` 可只读解析 Polyvore `valid.json`，通过进程内双向索引查询同 outfit 共现候选；不写缓存、不接 Neo4j，也不接管现有 Chatbot 检索主链。
+- `tools/cli_polyvore_recommend.py` 已将独立三路检索 Top1 与 outfit 共现索引串联为“中文查询 → 锚点商品 → 搭配候选”smoke；只做顺序编排，不重新打分，也不接管现有 Chatbot 检索主链。
 - `src/data/polyvore_item_resolver.py` 可只读合并 100 条 sample manifest 与 5 条 enriched JSONL，为推荐 anchor 和候选附加稳定的 `resolved` metadata；无法解析的商品保留原关系结果并明确返回 `found=false`，不会补图或调用外部服务。
 - `src/polyvore_recommend_service.py` 是 CLI 与 FastAPI 共用的唯一 Polyvore 推荐运行时组装边界；`src/api/app.py` 暴露 `GET /health` 与 `POST /polyvore/recommend`，应用启动时只组装一次 service。
 - 现有部分测试依赖 DashScope、LangChain、Chinese-CLIP 及有效 API Key，纯配置测试必须使用 Python 标准库独立运行。
 - backend 与 frontend 配置中的 `karpathy-guidelines` 使用当前开发机绝对路径；迁移到其他机器时需要调整该路径。
 - `PolyvoreRecommendConfig.valid_path`、`src/data/polyvore_import.py` 的 `DEFAULT_PARQUET_PATH` 等使用本机硬编码绝对路径（如 `D:\datasets\...`）；迁移到其他机器时需要调整。
+
+## 命令入口
+
+- 正式交互入口保留为 `python -m src.cli`。
+- 开发工具从项目根运行：`python -m tools.cli_cnclip_index`、`python -m tools.cli_polyvore_text_index`、`python -m tools.cli_polyvore_retrieval`、`python -m tools.cli_polyvore_outfit`、`python -m tools.cli_polyvore_recommend`。

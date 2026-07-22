@@ -101,7 +101,7 @@ class PolyvoreTextStoreTest(unittest.TestCase):
             )
 
     def test_cli_只读取前五条并使用注入的假_embedding_和_chroma(self):
-        cli = import_required("src.cli_polyvore_text_index")
+        cli = import_required("tools.cli_polyvore_text_index")
         items = sample_items(6)
         vectors = [[float(index)] * 1024 for index in range(5)]
         embedding_model = MagicMock()

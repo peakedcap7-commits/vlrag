@@ -22,7 +22,7 @@ def import_required(module_name):
 def _read_cli_ast():
     """读取 cli_polyvore_recommend.py 源码并解析为 AST。"""
     project_root = Path(__file__).resolve().parents[1]
-    cli_path = project_root / "src" / "cli_polyvore_recommend.py"
+    cli_path = project_root / "tools" / "cli_polyvore_recommend.py"
     return ast.parse(cli_path.read_text(encoding="utf-8"))
 
 
