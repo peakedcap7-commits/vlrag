@@ -4,6 +4,8 @@ import re
 from collections import Counter
 from pathlib import Path
 
+from src.performance import measure
+
 
 TEXT_COLLECTION_NAME = "products_text_v3_v1"
 IMAGE_COLLECTION_NAME = "products_image_cnclip_v1"
@@ -260,14 +262,20 @@ def retrieve_polyvore_query(
         raise ValueError("limit 必须在 1 到 5 之间")
     text_collection = chroma_client.get_collection(name=TEXT_COLLECTION_NAME)
     image_collection = chroma_client.get_collection(name=IMAGE_COLLECTION_NAME)
-    text_raw = text_collection.query(
-        query_embeddings=[text_embeddings.embed_query(query)],
-        n_results=limit,
-    )
-    image_raw = image_collection.query(
-        query_embeddings=[image_embeddings.embed_query(query)],
-        n_results=limit,
-    )
+    with measure("text_embed_ms", operation="recommend"):
+        text_vector = text_embeddings.embed_query(query)
+    with measure("chroma_query_ms", operation="recommend", channel="text"):
+        text_raw = text_collection.query(
+            query_embeddings=[text_vector],
+            n_results=limit,
+        )
+    with measure("clip_embed_ms", operation="recommend"):
+        image_vector = image_embeddings.embed_query(query)
+    with measure("chroma_query_ms", operation="recommend", channel="image"):
+        image_raw = image_collection.query(
+            query_embeddings=[image_vector],
+            n_results=limit,
+        )
     metadata_items = (
         _load_enriched_items(enriched_path) if enriched_path is not None else []
     )
@@ -282,3 +290,22 @@ def retrieve_polyvore_query(
     )
     return apply_metadata_rule_weights(query, fused_results, metadata_items)
 
+
+def retrieve_polyvore_text_candidates(
+    query,
+    chroma_client,
+    text_embeddings,
+    limit=5,
+):
+    """仅查询 Polyvore 文本 collection，供改搭候选召回使用。"""
+    if not 1 <= limit <= 5:
+        raise ValueError("limit 必须在 1 到 5 之间")
+    collection = chroma_client.get_collection(name=TEXT_COLLECTION_NAME)
+    with measure("text_embed_ms", operation="outfit_revise"):
+        text_vector = text_embeddings.embed_query(query)
+    with measure("chroma_query_ms", operation="outfit_revise"):
+        results = collection.query(
+            query_embeddings=[text_vector],
+            n_results=limit,
+        )
+    return _normalize_chroma_results(results)

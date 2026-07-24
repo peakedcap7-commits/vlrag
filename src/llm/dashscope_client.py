@@ -67,6 +67,8 @@ def describe_image_b64(
 def build_chat_llm(
     model: str = QWEN_MAX,
     temperature: float = 0.7,
+    timeout=None,
+    max_retries: int = 2,
 ) -> ChatOpenAI:
     """纯文本对话 LLM —— OpenAI 兼容模式"""
     return ChatOpenAI(
@@ -74,6 +76,8 @@ def build_chat_llm(
         base_url=DASHSCOPE_BASE_URL,
         api_key=DASHSCOPE_API_KEY,
         temperature=temperature,
+        timeout=timeout,
+        max_retries=max_retries,
     )
 
 

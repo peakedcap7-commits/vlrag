@@ -1,28 +1,39 @@
-"""百炼 text-embedding-v3 适配 —— 基于 LangChain 社区集成"""
+"""百炼 text-embedding-v3 的 OpenAI 兼容接口适配器。"""
+
 from typing import List
 
-from langchain_community.embeddings import DashScopeEmbeddings as _DashScopeEmbeddings
+import httpx
+from openai import OpenAI
 
-from src.config import TEXT_EMBEDDING_V3, DASHSCOPE_API_KEY
+from src.config import DASHSCOPE_API_KEY, DASHSCOPE_BASE_URL, TEXT_EMBEDDING_V3
 
 
-class DashScopeEmbeddings(_DashScopeEmbeddings):
-    """
-    百炼文本嵌入封装。
-    默认使用 text-embedding-v3，输出 1024 维向量。
-    """
+class DashScopeEmbeddings:
+    """提供项目现有检索链所需的文本嵌入接口。"""
 
-    def __init__(self, **kwargs):
-        super().__init__(
-            model=kwargs.pop("model", TEXT_EMBEDDING_V3),
-            dashscope_api_key=kwargs.pop("dashscope_api_key", DASHSCOPE_API_KEY),
-            **kwargs,
+    def __init__(
+        self,
+        model=TEXT_EMBEDDING_V3,
+        dashscope_api_key=DASHSCOPE_API_KEY,
+        client=None,
+    ):
+        self.model = model
+        self.client = client or OpenAI(
+            api_key=dashscope_api_key,
+            base_url=DASHSCOPE_BASE_URL,
+            http_client=httpx.Client(trust_env=False, timeout=60),
         )
 
     def embed_documents(self, texts: List[str]) -> List[List[float]]:
-        """批量文本嵌入"""
-        return super().embed_documents(texts)
+        """批量生成文本向量，并按输入索引稳定返回。"""
+        if not texts:
+            return []
+        response = self.client.embeddings.create(model=self.model, input=texts)
+        return [
+            item.embedding
+            for item in sorted(response.data, key=lambda item: item.index)
+        ]
 
     def embed_query(self, text: str) -> List[float]:
-        """单条查询嵌入"""
-        return super().embed_query(text)
+        """生成单条查询向量。"""
+        return self.embed_documents([text])[0]

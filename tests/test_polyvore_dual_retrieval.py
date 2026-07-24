@@ -55,6 +55,34 @@ class FakeChromaClient:
 
 
 class PolyvoreDualRetrievalTest(unittest.TestCase):
+    def test_改搭候选只查询文本_collection(self):
+        module = import_required("src.polyvore_retrieval")
+        text_collection = FakeCollection(
+            {
+                "ids": [["pants"]],
+                "documents": [["蓝色牛仔裤"]],
+                "metadatas": [[
+                    {
+                        "item_id": "pants",
+                        "object_key": "polyvore/items/pants.jpg",
+                    }
+                ]],
+            }
+        )
+        client = FakeChromaClient({TEXT_COLLECTION_NAME: text_collection})
+        embeddings = FakeEmbeddings([0.1] * 1024)
+
+        results = module.retrieve_polyvore_text_candidates(
+            "裤子 蓝色",
+            client,
+            embeddings,
+            limit=1,
+        )
+
+        self.assertEqual(client.requested_names, [TEXT_COLLECTION_NAME])
+        self.assertEqual(embeddings.queries, ["裤子 蓝色"])
+        self.assertEqual(results[0]["item_id"], "pants")
+
     def test_bm25_从增强记录命中并参与_rrf(self):
         module = import_required("src.polyvore_retrieval")
         records = [

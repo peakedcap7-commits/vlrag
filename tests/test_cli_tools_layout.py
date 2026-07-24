@@ -6,15 +6,16 @@ from pathlib import Path
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 TOOL_MODULES = (
     "cli_cnclip_index.py",
-    "cli_polyvore_outfit.py",
     "cli_polyvore_recommend.py",
     "cli_polyvore_retrieval.py",
     "cli_polyvore_text_index.py",
+    "cli_polyvore_neo4j_import.py",
+    "cli_polyvore_neo4j_chroma_index.py",
 )
 
 
 class CliToolsLayoutTest(unittest.TestCase):
-    def test_五个开发工具只存在于_tools目录(self):
+    def test_开发工具只存在于_tools目录(self):
         for filename in TOOL_MODULES:
             self.assertTrue((PROJECT_ROOT / "tools" / filename).is_file())
             self.assertFalse((PROJECT_ROOT / "src" / filename).exists())

@@ -1,8 +1,16 @@
 """百炼 API 连通性测试"""
+import os
+
 import pytest
 
-from src.config import DASHSCOPE_API_KEY
-from src.llm.dashscope_client import build_chat_llm, build_light_llm
+from src.config import DASHSCOPE_API_KEY, QWEN_TURBO
+from src.llm.dashscope_client import build_chat_llm
+
+
+pytestmark = pytest.mark.skipif(
+    os.getenv("RUN_DASHSCOPE_SMOKE") != "1",
+    reason="仅在 RUN_DASHSCOPE_SMOKE=1 时调用真实百炼服务",
+)
 
 
 def test_api_key_exists():
@@ -14,7 +22,7 @@ def test_api_key_exists():
 
 def test_qwen_turbo_ping():
     """验证 qwen-turbo 连通性 —— 一次简单对话"""
-    llm = build_light_llm()
+    llm = build_chat_llm(model=QWEN_TURBO)
     resp = llm.invoke("hi")
     assert resp.content is not None
     assert len(resp.content) > 0

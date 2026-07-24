@@ -2,12 +2,37 @@
 import ast
 import tomllib
 from pathlib import Path
+from types import SimpleNamespace
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
 
 class TestDashScopeEmbeddings:
     """百炼 text-embedding-v3 测试"""
+
+    def test_兼容接口客户端批量结果按索引返回(self):
+        """验证新 Key 使用兼容接口时仍保持输入顺序。"""
+
+        class FakeEmbeddings:
+            def create(self, model, input):
+                assert model == "text-embedding-v3"
+                assert input == ["甲", "乙"]
+                return SimpleNamespace(
+                    data=[
+                        SimpleNamespace(index=1, embedding=[2.0] * 1024),
+                        SimpleNamespace(index=0, embedding=[1.0] * 1024),
+                    ]
+                )
+
+        fake_client = SimpleNamespace(embeddings=FakeEmbeddings())
+        from src.embeddings.dashscope_emb import DashScopeEmbeddings
+
+        embeddings = DashScopeEmbeddings(client=fake_client)
+
+        vectors = embeddings.embed_documents(["甲", "乙"])
+
+        assert vectors[0][0] == 1.0
+        assert vectors[1][0] == 2.0
 
     def test_embed_query_dimension(self):
         """验证输出维度为 1024"""

@@ -110,8 +110,9 @@ def import_chinese_clip_with_fake_dependencies():
     functional.normalize = lambda value, **_kwargs: value
     nn = types.ModuleType("torch.nn")
     nn.functional = functional
+    sys.modules.pop("src.config", None)
     sys.modules.pop("src.embeddings.chinese_clip", None)
-    with patch.dict(
+    with patch.dict(os.environ, {"CHINESE_CLIP_MODEL": MODEL_NAME}), patch.dict(
         sys.modules,
         {
             "transformers": transformers,

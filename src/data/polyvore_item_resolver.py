@@ -24,6 +24,14 @@ def build_item_index(records=None, jsonl_path=None):
     return {str(item["item_id"]): dict(item) for item in items}
 
 
+def merge_item_indexes(*indexes):
+    """按传入顺序合并索引，后传入的记录优先。"""
+    merged = {}
+    for index in indexes:
+        merged.update(index)
+    return merged
+
+
 def resolve_item(item_id, item_index, enriched_index=None):
     """合并样本与增强索引并返回严格字段的商品信息。"""
     item_id = str(item_id)

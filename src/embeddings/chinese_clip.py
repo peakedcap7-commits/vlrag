@@ -42,6 +42,11 @@ class ChineseCLIPEmbeddings:
         features = functional.normalize(features, p=2, dim=-1)
         return features.squeeze(0).detach().cpu().tolist()
 
+    def _to_vectors(self, features):
+        """将批量特征归一化并转换为普通列表。"""
+        features = functional.normalize(features, p=2, dim=-1)
+        return features.detach().cpu().tolist()
+
     def embed_query(self, text):
         """将中文查询编码为 512 维归一化向量。"""
         inputs = self.processor(
@@ -67,3 +72,20 @@ class ChineseCLIPEmbeddings:
                 **self._move_inputs(inputs)
             )
         return self._to_vector(features)
+
+    def embed_images(self, images):
+        """批量编码图片字节或本地路径，降低 232 条 CPU 索引开销。"""
+        opened_images = []
+        try:
+            for image in images:
+                source = BytesIO(image) if isinstance(image, (bytes, bytearray)) else Path(image)
+                opened_images.append(Image.open(source).convert("RGB"))
+            inputs = self.processor(images=opened_images, return_tensors="pt")
+            with torch.no_grad():
+                features = self.model.get_image_features(
+                    **self._move_inputs(inputs)
+                )
+            return self._to_vectors(features)
+        finally:
+            for image in opened_images:
+                image.close()

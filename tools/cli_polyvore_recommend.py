@@ -44,11 +44,14 @@ def main():
             enriched_path=args.enriched,
         )
     )
-    result = service.recommend(
-        query=args.query,
-        top_k=args.top_k,
-        retrieval_limit=args.retrieval_limit,
-    )
+    try:
+        result = service.recommend(
+            query=args.query,
+            top_k=args.top_k,
+            retrieval_limit=args.retrieval_limit,
+        )
+    finally:
+        service.close()
     print(json.dumps(result, ensure_ascii=False, indent=2))
 
 

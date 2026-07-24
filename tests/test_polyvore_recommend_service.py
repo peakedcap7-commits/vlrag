@@ -24,6 +24,21 @@ class FakeRetrieval:
         return self.results
 
 
+class FakeOutfitProvider:
+    """记录 Neo4j outfit 查询参数。"""
+
+    def __init__(self):
+        self.calls = []
+        self.closed = False
+
+    def query(self, anchor_item_id, top_k):
+        self.calls.append((anchor_item_id, top_k))
+        return []
+
+    def close(self):
+        self.closed = True
+
+
 class PolyvoreRecommendServiceTest(unittest.TestCase):
     def test_默认_valid_path_使用_nondisjoint_数据集(self):
         module = import_required("src.polyvore_recommend_service")
@@ -34,6 +49,15 @@ class PolyvoreRecommendServiceTest(unittest.TestCase):
             config.valid_path,
             Path(r"D:\datasets\polyvore-outfits\nondisjoint\valid.json"),
         )
+        self.assertEqual(
+            config.neo4j_manifest_path,
+            Path("data/processed/polyvore_neo4j_items_manifest.jsonl"),
+        )
+        self.assertEqual(
+            config.retrieval_manifest_path,
+            Path("data/processed/polyvore_neo4j_items_retrieval.jsonl"),
+        )
+        self.assertEqual(config.outfit_provider, "neo4j")
 
     def test_recommend_只编排注入依赖并透传三个请求参数(self):
         module = import_required("src.polyvore_recommend_service")
@@ -50,19 +74,11 @@ class PolyvoreRecommendServiceTest(unittest.TestCase):
                 }
             ]
         )
-        outfit_calls = []
-
-        def outfit_query(anchor_item_id, item_to_outfit_ids, outfit_to_item_ids):
-            outfit_calls.append(
-                (anchor_item_id, item_to_outfit_ids, outfit_to_item_ids)
-            )
-            return []
+        outfit_provider = FakeOutfitProvider()
 
         service = module.PolyvoreRecommendService(
             retrieval=retrieval,
-            outfit_query=outfit_query,
-            item_to_outfit_ids={"anchor": ["outfit-1"]},
-            outfit_to_item_ids={"outfit-1": ["anchor"]},
+            outfit_provider=outfit_provider,
             resolver=lambda item_id: {"found": True, "item_id": item_id},
         )
 
@@ -73,11 +89,14 @@ class PolyvoreRecommendServiceTest(unittest.TestCase):
         )
 
         self.assertEqual(retrieval.calls, [("蓝色休闲穿搭", 3)])
-        self.assertEqual(outfit_calls[0][0], "anchor")
+        self.assertEqual(outfit_provider.calls, [("anchor", 5)])
         self.assertEqual(result["query"], "蓝色休闲穿搭")
         self.assertEqual(result["anchor"]["item_id"], "anchor")
         self.assertTrue(result["anchor"]["resolved"]["found"])
         self.assertEqual(result["outfit_candidates"], [])
+
+        service.close()
+        self.assertTrue(outfit_provider.closed)
 
     def test_api_与_cli_共同从_service模块导入_builder(self):
         project_root = Path(__file__).resolve().parents[1]
@@ -100,6 +119,15 @@ class PolyvoreRecommendServiceTest(unittest.TestCase):
         )
         self.assertIn(expected, imported_names(api_path))
         self.assertIn(expected, imported_names(cli_path))
+
+    def test_service_不再导入内存_outfit_graph(self):
+        project_root = Path(__file__).resolve().parents[1]
+        source = (project_root / "src/polyvore_recommend_service.py").read_text(
+            encoding="utf-8"
+        )
+
+        self.assertNotIn("polyvore_outfit_graph", source)
+        self.assertIn("neo4j_outfit_provider", source)
 
 
 if __name__ == "__main__":

@@ -12,6 +12,7 @@ dependencies = [
     "langchain-chroma>=0.1.0",
     "langchain-core>=0.3.0",
     "langchain-openai>=0.3.0",
+    "langgraph>=1.2,<2",
 
     # 数据处理 & 图片
     "datasets>=2.0.0",

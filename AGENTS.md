@@ -17,13 +17,17 @@
 7. 未通过必要测试、审查和验收时不得宣布完成。
 主 Agent 同时最多调度三个专业 Agent。专业 Agent 不得继续派生子 Agent。
 
+## 任务分级与 token 策略
+执行任务前先按 `docs/agent/TASK_POLICY.md` 判断小/中/大任务，并采用对应的上下文、Agent 调度、测试和汇报策略。默认按小任务节省 token；只有触发架构、数据库、安全、部署或用户明确要求时，才扩大为中/大任务流程。
+
 ## 启动时读取顺序
 新任务开始时依次读取：
 1. AGENTS.md；
-2. docs/agent/PROJECT_STATE.md；
-3. docs/agent/TASK_BOARD.md；
-4. 与需求相关的 ARCHITECTURE.md 或 DATABASE.md；
-5. docs/agent/ACCEPTANCE.md。
+2. docs/agent/TASK_POLICY.md；
+3. docs/agent/PROJECT_STATE.md；
+4. docs/agent/TASK_BOARD.md；
+5. 与需求相关的 ARCHITECTURE.md 或 DATABASE.md；
+6. 需要验收时读取 docs/agent/ACCEPTANCE.md。
 只向专业 Agent 提供当前任务所需的最小上下文，不转发无关原始对话和日志。
 
 ## 角色调度
@@ -35,6 +39,7 @@
 - reviewer：测试通过后、合并前执行只读审查。
 - acceptance：重要用户功能在审查问题处理后执行最终验收。
 单文件小修复不强制启动全部角色。只读调查、测试和审查可并行；多个写密集任务仅在文件所有权清晰且使用独立 Worktree 时并行。
+小任务默认不启动专业 Agent；若必须启动，先说明触发的门禁原因。
 
 ## 前后端最小实现
 backend 和 frontend 开发前必须读取并使用 karpathy-guidelines：
@@ -74,6 +79,7 @@ backend 和 frontend 开发前必须读取并使用 karpathy-guidelines：
 
 ## 共享记忆
 - AGENTS.md 保存长期协作规则。
+- TASK_POLICY.md 保存任务分级、节省 token、测试范围和汇报策略。
 - PROJECT_STATE.md 保存当前项目事实。
 - ARCHITECTURE.md 保存模块边界和依赖方向。
 - DATABASE.md 保存当前存储结构和迁移规则。
@@ -100,6 +106,7 @@ Claude Code 侧主 Agent 汇总专业 Agent 结果后,按 `C:/Users/Administrato
 - 串行小修改不创建 Worktree。
 - 合并前先检查提交范围和测试证据。
 - 合并完成并验证后清理临时 Worktree。
+- 本地 commit 和远端 push 分开授权；只有用户明确说“push/推送”时才允许推送远端。
 - 禁止使用 git reset --hard 或未经用户批准丢弃现有修改。
 
 ## 质量门禁

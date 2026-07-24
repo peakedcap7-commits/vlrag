@@ -5,10 +5,19 @@
 
 新任务开始时,按 `AGENTS.md`「启动时读取顺序」依次加载:
 1. `AGENTS.md`;
-2. `docs/agent/PROJECT_STATE.md`;
-3. `docs/agent/TASK_BOARD.md`;
-4. 与需求相关的 `docs/agent/ARCHITECTURE.md` 或 `docs/agent/DATABASE.md`;
-5. `docs/agent/ACCEPTANCE.md`。
+2. `docs/agent/TASK_POLICY.md`;
+3. `docs/agent/PROJECT_STATE.md`;
+4. `docs/agent/TASK_BOARD.md`;
+5. 与需求相关的 `docs/agent/ARCHITECTURE.md` 或 `docs/agent/DATABASE.md`;
+6. 需要验收时读取 `docs/agent/ACCEPTANCE.md`。
+
+默认测试解释器固定为:
+
+```powershell
+D:\pj\vlrag\shopping-qna\.venv\Scripts\python.exe
+```
+
+除非用户明确要求,不要使用 Anaconda base、系统 Python 或其他全局 Python 作为验收环境。
 
 ## 角色派发(Claude Code 侧)
 - 本主会话即主 Agent,是唯一调度入口;用户只向主 Agent 下达指令。
@@ -26,6 +35,8 @@
 
 ## 完成定义
 宣布完成前必须满足 `AGENTS.md`「完成定义」全部条件;未通过必要测试、审查和验收时不得宣布完成。
+
+本地 commit 与远端 push 分开授权;只有用户明确说“push/推送”时才允许推送远端。
 
 ## 模型说明
 本会话及派发的 subagent 当前由 `glm-5.2` 驱动;输出质量受此影响,严守 `AGENTS.md` 统一汇报格式以补偿。

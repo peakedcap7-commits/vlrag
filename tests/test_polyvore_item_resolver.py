@@ -93,6 +93,30 @@ class PolyvoreItemResolverTest(unittest.TestCase):
         self.assertEqual(resolved["object_key"], record["object_key"])
         self.assertEqual(set(resolved), RESOLVED_FIELDS)
 
+    def test_neo4j_manifest兜底图片且_enriched仍优先(self):
+        module = import_required("src.data.polyvore_item_resolver")
+        neo4j_index = module.build_item_index(
+            records=[
+                {
+                    "item_id": "candidate",
+                    "bucket": "shopping-qna",
+                    "object_key": "polyvore/items/candidate.jpg",
+                    "category": "基础类别",
+                }
+            ]
+        )
+        sample_index = module.build_item_index(records=[])
+        enriched_index = module.build_item_index(
+            records=[{"item_id": "candidate", "category": "增强类别"}]
+        )
+
+        base_index = module.merge_item_indexes(neo4j_index, sample_index)
+        resolved = module.resolve_item("candidate", base_index, enriched_index)
+
+        self.assertTrue(resolved["found"])
+        self.assertEqual(resolved["object_key"], "polyvore/items/candidate.jpg")
+        self.assertEqual(resolved["category"], "增强类别")
+
 
 if __name__ == "__main__":
     unittest.main()

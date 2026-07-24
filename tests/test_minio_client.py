@@ -7,10 +7,6 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 
-# 测试进程禁止读取开发者真实 .env，确保配置断言完全由测试环境控制。
-os.environ["PYTHON_DOTENV_DISABLED"] = "1"
-
-
 # 这是一个可被常见图片工具识别的 1×1 JPEG，仅供上传连通性验证。
 MINIMAL_JPEG = base64.b64decode(
     "/9j/4AAQSkZJRgABAQEASABIAAD/2wBDAP//////////////////////////////////////////////////////////////////////////////////////"
@@ -40,8 +36,7 @@ class MinioConfigTest(unittest.TestCase):
                 self.assertIs(config.MINIO_SECURE, True)
                 self.assertEqual(config.MINIO_BUCKET, "test-bucket")
         finally:
-            with patch.dict(os.environ, {"PYTHON_DOTENV_DISABLED": "1"}):
-                importlib.reload(config)
+            importlib.reload(config)
 
     def test_minio_secure_忽略首尾空格(self):
         import src.config as config
@@ -57,8 +52,7 @@ class MinioConfigTest(unittest.TestCase):
                 config = importlib.reload(config)
                 self.assertIs(config.MINIO_SECURE, True)
         finally:
-            with patch.dict(os.environ, {"PYTHON_DOTENV_DISABLED": "1"}):
-                importlib.reload(config)
+            importlib.reload(config)
 
     def test_minio_secure_非法值抛出明确错误(self):
         import src.config as config
@@ -74,8 +68,7 @@ class MinioConfigTest(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, "MINIO_SECURE"):
                     importlib.reload(config)
         finally:
-            with patch.dict(os.environ, {"PYTHON_DOTENV_DISABLED": "1"}):
-                importlib.reload(config)
+            importlib.reload(config)
 
 
 class MinioClientTest(unittest.TestCase):
@@ -85,16 +78,16 @@ class MinioClientTest(unittest.TestCase):
         with patch.object(minio_client, "Minio") as minio_class:
             client = minio_client.create_minio_client(
                 endpoint="localhost:9000",
-                access_key="admin",
-                secret_key="admin123456",
+                access_key="test-access-key",
+                secret_key="test-secret-key",
                 secure=False,
             )
 
         self.assertIs(client, minio_class.return_value)
         minio_class.assert_called_once_with(
             "localhost:9000",
-            access_key="admin",
-            secret_key="admin123456",
+            access_key="test-access-key",
+            secret_key="test-secret-key",
             secure=False,
         )
 

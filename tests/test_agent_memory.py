@@ -11,6 +11,7 @@ EXPECTED_FILES = {
     "DATABASE.md",
     "DECISIONS.md",
     "TASK_BOARD.md",
+    "TASK_POLICY.md",
     "ACCEPTANCE.md",
 }
 METADATA_FIELDS = (
@@ -36,7 +37,19 @@ class AgentMemoryTest(unittest.TestCase):
     def test_decisions_match_approved_records(self):
         content = (MEMORY_DIR / "DECISIONS.md").read_text(encoding="utf-8")
         decision_ids = set(re.findall(r"^##\s+(DEC-\d{3})\b", content, re.MULTILINE))
-        self.assertEqual(decision_ids, {"DEC-001", "DEC-002", "DEC-003", "DEC-004"})
+        self.assertEqual(
+            decision_ids,
+            {
+                "DEC-001",
+                "DEC-002",
+                "DEC-003",
+                "DEC-004",
+                "DEC-005",
+                "DEC-006",
+                "DEC-007",
+                "DEC-008",
+            },
+        )
 
     def test_memory_records_current_project_constraints(self):
         project_state = (MEMORY_DIR / "PROJECT_STATE.md").read_text(encoding="utf-8")
@@ -45,13 +58,12 @@ class AgentMemoryTest(unittest.TestCase):
 
         self.assertIn("Chroma", project_state)
         self.assertIn("尚未形成正式前端目录", project_state)
-        for filename, content in (
-            ("PROJECT_STATE.md", project_state),
-            ("ARCHITECTURE.md", architecture),
-            ("DATABASE.md", database),
-        ):
-            with self.subTest(filename=filename):
-                self.assertIn("Neo4j 尚未接入", content)
+        self.assertIn("232 条图切片", project_state)
+        self.assertIn("neo4j_outfit_provider", architecture)
+        self.assertIn("232 个 Item、40 个 Outfit、233 条关系", database)
+        self.assertIn("M2", project_state)
+        self.assertIn("M3", project_state)
+        self.assertIn("M4 暂缓", project_state)
 
     def test_memory_records_completed_multi_agent_acceptance(self):
         project_state = (MEMORY_DIR / "PROJECT_STATE.md").read_text(encoding="utf-8")

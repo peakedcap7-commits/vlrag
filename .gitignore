@@ -17,10 +17,12 @@ chroma_data/
 data/raw/
 data/processed/
 data/minio/
+data/neo4j/
 data/tools/
 
 # 文档渲染产物
 _docx_render/
+.codex_tmp/
 
 # Notebooks
 .ipynb_checkpoints/

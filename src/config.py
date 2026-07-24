@@ -32,6 +32,7 @@ CHINESE_CLIP_MODEL = os.getenv(
     "OFA-Sys/chinese-clip-vit-base-patch16",
 )
 CHINESE_CLIP_EMBEDDING_DIM = 512
+ENABLE_MODEL_WARMUP = _parse_bool_env("ENABLE_MODEL_WARMUP")
 
 # ===== 检索配置 =====
 RETRIEVER_K = 5
@@ -44,6 +45,12 @@ MINIO_ACCESS_KEY = os.getenv("MINIO_ACCESS_KEY")
 MINIO_SECRET_KEY = os.getenv("MINIO_SECRET_KEY")
 MINIO_SECURE = _parse_bool_env("MINIO_SECURE")
 MINIO_BUCKET = os.getenv("MINIO_BUCKET", "shopping-qna")
+
+# ===== Neo4j Outfit 图配置 =====
+OUTFIT_PROVIDER = os.getenv("OUTFIT_PROVIDER", "neo4j").strip().lower()
+NEO4J_URI = os.getenv("NEO4J_URI", "bolt://localhost:7687")
+NEO4J_USER = os.getenv("NEO4J_USER", "neo4j")
+NEO4J_PASSWORD = os.getenv("NEO4J_PASSWORD")
 
 # ===== 数据配置 =====
 DATASET_NAME = "hahminlew/kream-product-blip-captions"
