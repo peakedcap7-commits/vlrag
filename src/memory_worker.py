@@ -2,6 +2,7 @@
 
 import argparse
 import json
+import logging
 import re
 import time
 from uuid import UUID, uuid4
@@ -10,6 +11,8 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from src.auth import Identity
 from src.memory import MemoryService, _vector, content_hash, validate_prompt_overlay
+
+logger = logging.getLogger("shopping_qna.memory_worker")
 
 SENSITIVE_TEXT = re.compile(
     r"(?:[\w.+-]+@[\w.-]+\.[A-Za-z]{2,}|https?://\S+|"
@@ -115,7 +118,21 @@ class MemoryWorker:
                 "procedural_optimize": self._procedural,
             }[job["job_type"]](identity, job)
         except Exception as exc:
-            self._finish(identity, job, type(exc).__name__)
+            error_code = (
+                re.sub(r"[^a-z0-9_]", "_", type(exc).__name__.lower())[:64]
+                or "worker_error"
+            )
+            logger.error(
+                json.dumps(
+                    {
+                        "event": "memory_job_failed",
+                        "job_id": str(job["job_id"]),
+                        "job_type": job["job_type"],
+                        "error_code": error_code,
+                    }
+                )
+            )
+            self._finish(identity, job, error_code)
         else:
             self._finish(identity, job, None)
         return True
@@ -124,16 +141,17 @@ class MemoryWorker:
         with self.memory.transaction(identity, "worker", self.worker_id) as cursor:
             if error_code:
                 cursor.execute(
-                    "SELECT memory.retry_memory_job(%s,interval '5 seconds',3) AS retried",
+                    "SELECT memory.retry_memory_job(%s,interval '5 seconds',3::integer) AS retried",
                     (job["job_id"],),
                 )
                 if cursor.fetchone()["retried"]:
                     return
             cursor.execute(
-                "UPDATE memory.memory_jobs SET status=%s,locked_at=NULL,locked_by=NULL,last_error_code=%s,updated_at=now() "
-                "WHERE tenant_id=%s AND job_id=%s AND locked_by=%s",
-                ("failed" if error_code else "done", error_code, identity.tenant_id, job["job_id"], self.worker_id),
+                "SELECT memory.complete_memory_job(%s,%s,%s) AS completed",
+                (job["job_id"], "failed" if error_code else "done", error_code),
             )
+            if not cursor.fetchone()["completed"]:
+                raise RuntimeError("memory_job_completion_rejected")
 
     def _semantic(self, identity, job):
         payload = job["payload"] if isinstance(job["payload"], dict) else json.loads(job["payload"])
@@ -278,15 +296,28 @@ def main():
     parser.add_argument("--poll-seconds", type=float, default=2.0)
     args = parser.parse_args()
     from src.config import (
+        EPISODIC_MEMORY_ENABLED,
         MEMORY_POLLER_DATABASE_URL,
+        MEMORY_READ_ENABLED,
         MEMORY_WORKER_DATABASE_URL,
         MEMORY_WORKER_ID,
+        MEMORY_WRITE_ENABLED,
+        PROCEDURAL_MEMORY_ENABLED,
+        SEMANTIC_MEMORY_ENABLED,
     )
     from src.embeddings.dashscope_emb import DashScopeEmbeddings
 
     if not MEMORY_WORKER_DATABASE_URL or not MEMORY_POLLER_DATABASE_URL:
         parser.error("必须配置 MEMORY_WORKER_DATABASE_URL 和 MEMORY_POLLER_DATABASE_URL")
-    memory = MemoryService(MEMORY_WORKER_DATABASE_URL, embeddings=DashScopeEmbeddings())
+    memory = MemoryService(
+        MEMORY_WORKER_DATABASE_URL,
+        embeddings=DashScopeEmbeddings(),
+        read_enabled=MEMORY_READ_ENABLED,
+        write_enabled=MEMORY_WRITE_ENABLED,
+        semantic_enabled=SEMANTIC_MEMORY_ENABLED,
+        episodic_enabled=EPISODIC_MEMORY_ENABLED,
+        procedural_enabled=PROCEDURAL_MEMORY_ENABLED,
+    )
     worker = MemoryWorker(
         memory,
         MEMORY_POLLER_DATABASE_URL,

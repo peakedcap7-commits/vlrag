@@ -45,7 +45,7 @@ services:
       retries: 20
 
   migrate:
-    build: .
+    image: shopping-qna-dev-app
     command: python -m src.memory_migrate
     environment:
       MEMORY_DATABASE_URL: postgresql://postgres:${POSTGRES_PASSWORD}@postgres:5432/shopping_qna_dev
@@ -103,7 +103,7 @@ services:
       retries: 30
 
   bootstrap:
-    build: .
+    image: shopping-qna-dev-app
     command: python -m src.bootstrap
     environment:
       <<: *app-env
@@ -119,6 +119,7 @@ services:
     restart: "no"
 
   api:
+    image: shopping-qna-dev-app
     build: .
     environment:
       <<: *app-env
@@ -137,7 +138,7 @@ services:
     restart: unless-stopped
 
   worker:
-    build: .
+    image: shopping-qna-dev-app
     command: python -m src.memory_worker
     environment:
       <<: *app-env

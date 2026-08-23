@@ -169,8 +169,6 @@ class MemoryService:
 
     def record_run(self, identity, thread_id, payload, state, run_id=None):
         run_id = run_id or uuid4()
-        if not self.write_enabled:
-            return run_id
         now = _now()
         expires_at = now + timedelta(days=30)
         conversation_state = payload.get("conversation_state") or {}
@@ -213,7 +211,7 @@ class MemoryService:
                     expires_at,
                 ),
             )
-            if state["status"] == "ok" and self.semantic_enabled:
+            if state["status"] == "ok" and self.write_enabled and self.semantic_enabled:
                 self._enqueue(
                     cursor,
                     identity.tenant_id,
@@ -332,6 +330,8 @@ class MemoryService:
     def optimize_prompt(self, identity, prompt_key, run_ids):
         self._require_admin(identity)
         self._require_prompt_key(prompt_key)
+        if not self.write_enabled or not self.procedural_enabled:
+            raise HTTPException(503, "程序记忆写入已禁用")
         job_id = uuid4()
         with self.transaction(identity) as cursor:
             self._enqueue(
@@ -374,13 +374,18 @@ class MemoryService:
     def activate_prompt(self, identity, prompt_key, version_id, expected_generation, rollback=False):
         self._require_admin(identity)
         self._require_prompt_key(prompt_key)
-        with self.transaction(identity) as cursor:
-            function = "memory.rollback_prompt" if rollback else "memory.activate_prompt"
-            cursor.execute(
-                f"SELECT {function}(%s,%s,%s,%s,%s,%s) AS generation",
-                (identity.tenant_id, prompt_key, version_id, expected_generation, identity.user_id, uuid4()),
-            )
-            return cursor.fetchone()
+        try:
+            with self.transaction(identity) as cursor:
+                function = "memory.rollback_prompt" if rollback else "memory.activate_prompt"
+                cursor.execute(
+                    f"SELECT {function}(%s,%s,%s,%s,%s,%s) AS generation",
+                    (identity.tenant_id, prompt_key, version_id, expected_generation, identity.user_id, uuid4()),
+                )
+                return cursor.fetchone()
+        except Exception as exc:
+            if getattr(exc, "sqlstate", None) in {"P0001", "40001", "40P01"}:
+                raise HTTPException(409, "程序版本状态冲突") from None
+            raise
 
     def approve_episode(self, identity, memory_id):
         self._require_admin(identity)
@@ -394,6 +399,12 @@ class MemoryService:
             )
             if cursor.rowcount != 1:
                 raise HTTPException(409, "情景记忆不可审批")
+            cursor.execute(
+                "INSERT INTO memory.audit_events "
+                "(tenant_id,event_id,actor_user_id,actor_type,action,resource_type,resource_id,details,expires_at) "
+                "VALUES (%s,%s,%s,'user','episode.approve','episodic',%s,'{}',now()+interval '365 days')",
+                (identity.tenant_id, uuid4(), identity.user_id, str(memory_id)),
+            )
 
     @staticmethod
     def _require_admin(identity):

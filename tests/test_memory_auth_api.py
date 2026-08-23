@@ -4,6 +4,8 @@ from pathlib import Path
 from uuid import UUID, uuid4
 
 import jwt
+import pytest
+from fastapi import HTTPException
 from fastapi.testclient import TestClient
 
 from src.api.app import create_app
@@ -166,6 +168,53 @@ def test_memory_feature_off_keeps_request_path_available():
     assert service.record_run(None, uuid4(), {}, {})
 
 
+def test_write_flag_keeps_thread_and_run_but_skips_memory_job():
+    class Cursor:
+        rowcount = 1
+
+        def __init__(self):
+            self.calls = []
+
+        def execute(self, sql, params):
+            self.calls.append((sql, params))
+
+    cursor = Cursor()
+    memory = object.__new__(MemoryService)
+    memory.write_enabled = False
+    memory.semantic_enabled = True
+
+    @contextmanager
+    def transaction(*_args):
+        yield cursor
+
+    memory.transaction = transaction
+    identity = type("I", (), {"tenant_id": TENANT_A, "user_id": USER})()
+    memory.record_run(
+        identity,
+        uuid4(),
+        {"message": "test"},
+        {"intent": "outfit_revise", "status": "ok", "response_message": "ok"},
+    )
+    sql = " ".join(call[0] for call in cursor.calls)
+    assert "assistant_threads" in sql
+    assert "assistant_runs" in sql
+    assert "memory_jobs" not in sql
+
+
+def test_prompt_optimization_respects_write_and_procedural_flags():
+    memory = object.__new__(MemoryService)
+    memory.write_enabled = False
+    memory.procedural_enabled = True
+    identity = type(
+        "I",
+        (),
+        {"is_admin": True, "tenant_id": TENANT_A, "user_id": USER},
+    )()
+    with pytest.raises(HTTPException) as caught:
+        memory.optimize_prompt(identity, "outfit_revise", [uuid4()])
+    assert caught.value.status_code == 503
+
+
 def test_procedural_recall_only_uses_active_pointer():
     class Cursor:
         def __init__(self):
@@ -226,9 +275,10 @@ def test_worker_retry_is_idempotent_and_lease_bound():
     worker.worker_id = uuid4()
     identity = type("I", (), {"tenant_id": TENANT_A})()
     job_id = uuid4()
-    worker._finish(identity, {"job_id": job_id}, "ValueError")
+    worker._finish(identity, {"job_id": job_id}, "valueerror")
     sql, params = cursor.calls[0]
     assert "memory.retry_memory_job" in sql
+    assert "3::integer" in sql
     assert params == (job_id,)
 
 
@@ -238,12 +288,13 @@ def test_worker_marks_job_failed_when_retry_budget_is_exhausted():
     class Cursor:
         def __init__(self):
             self.calls = []
+            self.results = iter(({"retried": False}, {"completed": True}))
 
         def execute(self, sql, params):
             self.calls.append((sql, params))
 
         def fetchone(self):
-            return {"retried": False}
+            return next(self.results)
 
     cursor = Cursor()
 
@@ -256,10 +307,126 @@ def test_worker_marks_job_failed_when_retry_budget_is_exhausted():
     worker.memory = Memory()
     worker.worker_id = uuid4()
     identity = type("I", (), {"tenant_id": TENANT_A})()
-    worker._finish(identity, {"job_id": uuid4()}, "TimeoutError")
+    job_id = uuid4()
+    worker._finish(identity, {"job_id": job_id}, "timeouterror")
     assert len(cursor.calls) == 2
-    assert "status=%s" in cursor.calls[1][0]
-    assert cursor.calls[1][1][0:2] == ("failed", "TimeoutError")
+    assert "memory.complete_memory_job" in cursor.calls[1][0]
+    assert cursor.calls[1][1] == (job_id, "failed", "timeouterror")
+
+
+def test_worker_rejects_false_job_completion():
+    from src.memory_worker import MemoryWorker
+
+    class Cursor:
+        def execute(self, _sql, _params):
+            pass
+
+        def fetchone(self):
+            return {"completed": False}
+
+    class Memory:
+        @contextmanager
+        def transaction(self, *_args):
+            yield Cursor()
+
+    worker = object.__new__(MemoryWorker)
+    worker.memory = Memory()
+    worker.worker_id = uuid4()
+    identity = type("I", (), {"tenant_id": TENANT_A})()
+    with pytest.raises(RuntimeError, match="memory_job_completion_rejected"):
+        worker._finish(identity, {"job_id": uuid4()}, None)
+
+
+def test_worker_logs_only_safe_job_failure_fields(caplog):
+    import json
+    import logging
+
+    from src.memory_worker import MemoryWorker
+
+    job_id = uuid4()
+    job = {
+        "tenant_id": TENANT_A,
+        "job_id": job_id,
+        "user_id": USER,
+        "job_type": "semantic_extract",
+        "payload": {"secret": "do-not-log"},
+    }
+    worker = object.__new__(MemoryWorker)
+    worker.claim = lambda: job
+
+    def fail(*_args):
+        raise ValueError("secret")
+
+    worker._semantic = fail
+    worker._finish = lambda *_args: None
+    with caplog.at_level(logging.ERROR, logger="shopping_qna.memory_worker"):
+        assert worker.run_once()
+    record = json.loads(caplog.records[-1].message)
+    assert record == {
+        "event": "memory_job_failed",
+        "job_id": str(job_id),
+        "job_type": "semantic_extract",
+        "error_code": "valueerror",
+    }
+    assert "do-not-log" not in caplog.text
+
+
+def test_episode_approval_writes_body_free_audit_event():
+    class Cursor:
+        rowcount = 1
+
+        def __init__(self):
+            self.calls = []
+
+        def execute(self, sql, params):
+            self.calls.append((sql, params))
+
+    cursor = Cursor()
+    memory = object.__new__(MemoryService)
+
+    @contextmanager
+    def transaction(*_args):
+        yield cursor
+
+    memory.transaction = transaction
+    identity = type(
+        "I",
+        (),
+        {"is_admin": True, "tenant_id": TENANT_A, "user_id": USER},
+    )()
+    memory_id = uuid4()
+    memory.approve_episode(identity, memory_id)
+    audit_sql, audit_params = cursor.calls[1]
+    assert "audit_events" in audit_sql
+    assert not {"observation", "action", "result"} & set(audit_sql.lower().split())
+    assert audit_params[-1] == str(memory_id)
+
+
+def test_prompt_switch_conflict_maps_to_generic_409():
+    class Conflict(Exception):
+        sqlstate = "P0001"
+
+    class Cursor:
+        def execute(self, _sql, _params):
+            raise Conflict("database detail must stay private")
+
+    memory = object.__new__(MemoryService)
+
+    @contextmanager
+    def transaction(*_args):
+        yield Cursor()
+
+    memory.transaction = transaction
+    identity = type(
+        "I",
+        (),
+        {"is_admin": True, "tenant_id": TENANT_A, "user_id": USER},
+    )()
+    with pytest.raises(HTTPException) as caught:
+        memory.activate_prompt(identity, "outfit_revise", uuid4(), 0)
+    assert caught.value.status_code == 409
+    assert caught.value.detail == "程序版本状态冲突"
+    assert "database detail" not in caught.value.detail
 
 
 def test_prompt_management_uses_controlled_database_functions():
@@ -272,7 +439,17 @@ def test_prompt_management_uses_controlled_database_functions():
     assert "memory.approve_prompt" in source
     assert "UPDATE memory.procedural_prompt_versions" not in source
     assert "memory.get_procedural_job_evidence" in worker
+    assert "memory.complete_memory_job" in worker
+    assert "UPDATE memory.memory_jobs" not in worker
     assert "FROM memory.procedural_prompt_active" not in worker
+    for flag in (
+        "read_enabled=MEMORY_READ_ENABLED",
+        "write_enabled=MEMORY_WRITE_ENABLED",
+        "semantic_enabled=SEMANTIC_MEMORY_ENABLED",
+        "episodic_enabled=EPISODIC_MEMORY_ENABLED",
+        "procedural_enabled=PROCEDURAL_MEMORY_ENABLED",
+    ):
+        assert flag in worker
 
 
 def test_episode_worker_creates_private_and_pending_shared_candidates():
@@ -294,6 +471,12 @@ def test_compose_declares_required_services_and_no_redis_or_celery():
         assert service in compose
     assert "redis:" not in compose
     assert "celery" not in compose.lower()
+
+
+def test_compose_builds_one_shared_application_image():
+    compose = (Path(__file__).parents[1] / "compose.yaml").read_text(encoding="utf-8")
+    assert compose.count("image: shopping-qna-dev-app") == 4
+    assert compose.count("build: .") == 1
 
 
 def test_docker_installs_cpu_only_torch():
