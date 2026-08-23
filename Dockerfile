@@ -19,4 +19,5 @@ RUN curl --fail --location --retry 5 --retry-delay 2 --retry-all-errors \
     && rm -f "/tmp/torch-2.6.0+cpu-cp312-cp312-linux_x86_64.whl" \
     && pip install ".[graph]"
 
+ENV PYTHONPATH=/app
 CMD ["uvicorn", "src.api.app:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "1"]

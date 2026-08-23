@@ -552,6 +552,7 @@ def test_neo4j_container_only_receives_supported_auth_setting():
 
 def test_docker_installs_cpu_only_torch():
     dockerfile = (Path(__file__).parents[1] / "Dockerfile").read_text(encoding="utf-8")
+    assert "PYTHONPATH=/app" in dockerfile
     assert "ARG TARGETARCH" in dockerfile
     assert 'test "$TARGETARCH" = "amd64"' in dockerfile
     assert "ca-certificates curl libgomp1" in dockerfile
