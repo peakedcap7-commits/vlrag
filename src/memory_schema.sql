@@ -1373,8 +1373,10 @@ GRANT INSERT ON memory.audit_events TO shopping_memory_worker;
 
 GRANT EXECUTE ON FUNCTION memory.claim_memory_job(uuid)
     TO shopping_memory_poller;
+REVOKE EXECUTE ON FUNCTION memory.reclaim_memory_jobs(interval)
+    FROM shopping_memory_poller;
 GRANT EXECUTE ON FUNCTION memory.reclaim_memory_jobs(interval)
-    TO shopping_memory_poller;
+    TO shopping_memory_maintenance;
 GRANT EXECUTE ON FUNCTION memory.retry_memory_job(uuid, interval, integer)
     TO shopping_memory_worker;
 GRANT EXECUTE ON FUNCTION memory.complete_memory_job(uuid, text, text)

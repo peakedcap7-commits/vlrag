@@ -161,6 +161,17 @@ class MemorySchemaStaticTest(unittest.TestCase):
             self.sql,
         )
 
+    def test_only_maintenance_can_reclaim_jobs(self):
+        signature = "FUNCTION memory.reclaim_memory_jobs(interval)"
+        self.assertIn(
+            f"REVOKE EXECUTE ON {signature}\n    FROM shopping_memory_poller",
+            self.sql,
+        )
+        self.assertIn(
+            f"GRANT EXECUTE ON {signature}\n    TO shopping_memory_maintenance",
+            self.sql,
+        )
+
     def test_procedural_evidence_is_claim_scoped_and_redacted(self):
         body = self.sql.split("FUNCTION memory.get_procedural_job_evidence", 1)[
             1
@@ -299,6 +310,44 @@ class MemorySchemaIntegrationTest(unittest.TestCase):
                 "DELETE FROM memory.assistant_threads WHERE thread_id = %s",
                 (thread_id,),
             )
+
+    def test_only_maintenance_has_reclaim_execute(self):
+        with (
+            self.psycopg.connect(self.dsn) as connection,
+            connection.cursor() as cursor,
+        ):
+            cursor.execute(
+                """
+                SELECT
+                    has_function_privilege(
+                        'shopping_memory_poller',
+                        'memory.reclaim_memory_jobs(interval)',
+                        'EXECUTE'
+                    ),
+                    has_function_privilege(
+                        'shopping_memory_maintenance',
+                        'memory.reclaim_memory_jobs(interval)',
+                        'EXECUTE'
+                    )
+                """
+            )
+            self.assertEqual(cursor.fetchone(), (False, True))
+
+        with (
+            self.psycopg.connect(self.dsn, autocommit=True) as connection,
+            connection.cursor() as cursor,
+        ):
+            cursor.execute("SET ROLE shopping_memory_poller")
+            with self.assertRaises(self.psycopg.errors.InsufficientPrivilege):
+                cursor.execute("SELECT memory.reclaim_memory_jobs()")
+
+        with (
+            self.psycopg.connect(self.dsn) as connection,
+            connection.cursor() as cursor,
+        ):
+            cursor.execute("SET LOCAL ROLE shopping_memory_maintenance")
+            cursor.execute("SELECT memory.reclaim_memory_jobs(interval '100 years')")
+            self.assertEqual(cursor.fetchone()[0], 0)
 
     def test_worker_completes_and_retries_only_through_functions(self):
         tenant_id, user_id = str(uuid4()), str(uuid4())
