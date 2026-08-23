@@ -565,7 +565,11 @@ FOR SELECT TO shopping_memory_api
 USING (
     tenant_id = memory.current_tenant_id()
     AND (
-        (scope = 'user' AND owner_user_id = memory.current_user_id())
+        (
+            memory.current_app_role() = 'user'
+            AND scope = 'user'
+            AND owner_user_id = memory.current_user_id()
+        )
         OR (scope = 'tenant' AND status = 'active')
         OR (scope = 'tenant' AND memory.current_app_role() = 'tenant_admin')
     )
@@ -577,15 +581,31 @@ FOR UPDATE TO shopping_memory_api
 USING (
     tenant_id = memory.current_tenant_id()
     AND (
-        (scope = 'user' AND owner_user_id = memory.current_user_id())
-        OR (scope = 'tenant' AND memory.current_app_role() = 'tenant_admin')
+        (
+            memory.current_app_role() = 'user'
+            AND scope = 'user'
+            AND owner_user_id = memory.current_user_id()
+        )
+        OR (
+            scope = 'tenant'
+            AND status = 'pending'
+            AND memory.current_app_role() = 'tenant_admin'
+        )
     )
 )
 WITH CHECK (
     tenant_id = memory.current_tenant_id()
     AND (
-        (scope = 'user' AND owner_user_id = memory.current_user_id())
-        OR (scope = 'tenant' AND memory.current_app_role() = 'tenant_admin')
+        (
+            memory.current_app_role() = 'user'
+            AND scope = 'user'
+            AND owner_user_id = memory.current_user_id()
+        )
+        OR (
+            scope = 'tenant'
+            AND status IN ('active', 'rejected')
+            AND memory.current_app_role() = 'tenant_admin'
+        )
     )
 );
 
@@ -597,7 +617,11 @@ USING (
     AND memory.current_app_role() = 'worker'
     AND (
         (scope = 'user' AND owner_user_id = memory.current_user_id())
-        OR (scope = 'tenant' AND memory.current_user_id() IS NULL)
+        OR (
+            scope = 'tenant'
+            AND status = 'pending'
+            AND memory.current_user_id() IS NULL
+        )
     )
 )
 WITH CHECK (
@@ -605,7 +629,11 @@ WITH CHECK (
     AND memory.current_app_role() = 'worker'
     AND (
         (scope = 'user' AND owner_user_id = memory.current_user_id())
-        OR (scope = 'tenant' AND memory.current_user_id() IS NULL)
+        OR (
+            scope = 'tenant'
+            AND status = 'pending'
+            AND memory.current_user_id() IS NULL
+        )
     )
 );
 
@@ -816,6 +844,100 @@ BEGIN
 END
 $$;
 
+CREATE OR REPLACE FUNCTION memory.retry_memory_job(
+    p_job_id uuid,
+    p_delay interval DEFAULT interval '5 seconds',
+    p_max_attempts smallint DEFAULT 3
+)
+RETURNS boolean
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = pg_catalog, memory, public
+AS $$
+DECLARE
+    retried boolean;
+BEGIN
+    IF memory.current_app_role() <> 'worker'
+       OR memory.current_tenant_id() IS NULL
+       OR memory.current_worker_id() IS NULL THEN
+        RAISE EXCEPTION '缺少 worker job 上下文';
+    END IF;
+    IF p_delay < interval '0 seconds' OR p_max_attempts <= 0 THEN
+        RAISE EXCEPTION 'retry 参数非法';
+    END IF;
+
+    UPDATE memory.memory_jobs job
+    SET status = 'pending',
+        available_at = now() + p_delay,
+        locked_at = NULL,
+        locked_by = NULL,
+        updated_at = now(),
+        last_error_code = 'retry_scheduled'
+    WHERE job.tenant_id = memory.current_tenant_id()
+      AND job.job_id = p_job_id
+      AND job.status = 'running'
+      AND job.locked_by = memory.current_worker_id()
+      AND job.attempts < p_max_attempts
+      AND (
+          job.user_id = memory.current_user_id()
+          OR (job.user_id IS NULL AND memory.current_user_id() IS NULL)
+      );
+    retried := FOUND;
+    RETURN retried;
+END
+$$;
+
+CREATE OR REPLACE FUNCTION memory.get_procedural_job_evidence(
+    p_job_id uuid
+)
+RETURNS TABLE (
+    run_id uuid,
+    request_summary jsonb,
+    response_summary jsonb,
+    feedback_event text,
+    feedback_rating smallint
+)
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = pg_catalog, memory, public
+AS $$
+BEGIN
+    IF memory.current_app_role() <> 'worker'
+       OR memory.current_tenant_id() IS NULL
+       OR memory.current_worker_id() IS NULL
+       OR memory.current_user_id() IS NOT NULL THEN
+        RAISE EXCEPTION '缺少 tenant procedural worker 上下文';
+    END IF;
+
+    RETURN QUERY
+    SELECT run.run_id,
+           run.request_summary
+               - ARRAY['authorization', 'token', 'tokens', 'image',
+                       'images', 'image_keys', 'conversation_state'],
+           run.response_summary
+               - ARRAY['authorization', 'token', 'tokens', 'image',
+                       'images', 'image_keys', 'conversation_state'],
+           feedback.event,
+           feedback.rating
+    FROM memory.memory_jobs job
+    CROSS JOIN LATERAL jsonb_array_elements_text(
+        coalesce(job.payload -> 'run_ids', '[]'::jsonb)
+    ) requested(run_id_text)
+    JOIN memory.assistant_runs run
+      ON run.tenant_id = job.tenant_id
+     AND run.run_id = requested.run_id_text::uuid
+    JOIN memory.assistant_feedback feedback
+      ON feedback.tenant_id = run.tenant_id
+     AND feedback.run_id = run.run_id
+    WHERE job.tenant_id = memory.current_tenant_id()
+      AND job.job_id = p_job_id
+      AND job.job_type = 'procedural_optimize'
+      AND job.user_id IS NULL
+      AND job.status = 'running'
+      AND job.locked_by = memory.current_worker_id();
+END
+$$;
+
 CREATE OR REPLACE FUNCTION memory._switch_prompt(
     p_tenant_id uuid,
     p_prompt_key text,
@@ -940,6 +1062,40 @@ AS $$
     )
 $$;
 
+CREATE OR REPLACE FUNCTION memory.get_active_prompt(
+    p_prompt_key text
+)
+RETURNS TABLE (
+    prompt_key text,
+    version_id uuid,
+    generation bigint,
+    content text
+)
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = pg_catalog, memory, public
+AS $$
+BEGIN
+    IF memory.current_tenant_id() IS NULL
+       OR memory.current_app_role() NOT IN ('user', 'tenant_admin', 'worker') THEN
+        RAISE EXCEPTION '缺少 prompt 读取上下文';
+    END IF;
+    RETURN QUERY
+    SELECT active.prompt_key,
+           version.version_id,
+           active.generation,
+           version.content
+    FROM memory.procedural_prompt_active active
+    JOIN memory.procedural_prompt_versions version
+      ON version.tenant_id = active.tenant_id
+     AND version.prompt_key = active.prompt_key
+     AND version.version_id = active.version_id
+    WHERE active.tenant_id = memory.current_tenant_id()
+      AND active.prompt_key = p_prompt_key
+      AND version.status = 'approved';
+END
+$$;
+
 CREATE OR REPLACE FUNCTION memory.mark_expired_memories(
     p_now timestamptz DEFAULT now()
 )
@@ -1024,9 +1180,12 @@ REVOKE ALL ON FUNCTION memory.current_app_role() FROM PUBLIC;
 REVOKE ALL ON FUNCTION memory.current_worker_id() FROM PUBLIC;
 REVOKE ALL ON FUNCTION memory.claim_memory_job(uuid) FROM PUBLIC;
 REVOKE ALL ON FUNCTION memory.reclaim_memory_jobs(interval) FROM PUBLIC;
+REVOKE ALL ON FUNCTION memory.retry_memory_job(uuid, interval, smallint) FROM PUBLIC;
+REVOKE ALL ON FUNCTION memory.get_procedural_job_evidence(uuid) FROM PUBLIC;
 REVOKE ALL ON FUNCTION memory._switch_prompt(uuid, text, uuid, bigint, uuid, uuid, text) FROM PUBLIC;
 REVOKE ALL ON FUNCTION memory.activate_prompt(uuid, text, uuid, bigint, uuid, uuid) FROM PUBLIC;
 REVOKE ALL ON FUNCTION memory.rollback_prompt(uuid, text, uuid, bigint, uuid, uuid) FROM PUBLIC;
+REVOKE ALL ON FUNCTION memory.get_active_prompt(text) FROM PUBLIC;
 REVOKE ALL ON FUNCTION memory.mark_expired_memories(timestamptz) FROM PUBLIC;
 REVOKE ALL ON FUNCTION memory.purge_expired_rows(timestamptz, interval) FROM PUBLIC;
 
@@ -1053,31 +1212,42 @@ GRANT SELECT, INSERT ON memory.assistant_feedback TO shopping_memory_api;
 GRANT SELECT, UPDATE (scope, status, reviewed_by, reviewed_at, updated_at,
                       embedding, deleted_at)
     ON memory.episodic_memories TO shopping_memory_api;
-GRANT SELECT, INSERT ON memory.procedural_prompt_versions
-    TO shopping_memory_api;
+REVOKE SELECT ON memory.procedural_prompt_versions,
+    memory.procedural_prompt_active
+    FROM shopping_memory_api, shopping_memory_worker;
+GRANT INSERT ON memory.procedural_prompt_versions TO shopping_memory_api;
 GRANT UPDATE (status, approved_by, approved_at)
     ON memory.procedural_prompt_versions TO shopping_memory_api;
-GRANT SELECT ON memory.procedural_prompt_active TO shopping_memory_api;
 GRANT SELECT, INSERT ON memory.memory_jobs TO shopping_memory_api;
 GRANT SELECT, INSERT ON memory.audit_events TO shopping_memory_api;
 
 GRANT SELECT ON memory.assistant_threads, memory.assistant_runs,
-    memory.assistant_feedback, memory.procedural_prompt_active
+    memory.assistant_feedback
     TO shopping_memory_worker;
 GRANT SELECT, INSERT, UPDATE ON memory.semantic_memories,
     memory.episodic_memories TO shopping_memory_worker;
 GRANT INSERT ON memory.procedural_prompt_versions TO shopping_memory_worker;
-GRANT SELECT, UPDATE ON memory.memory_jobs TO shopping_memory_worker;
+REVOKE UPDATE ON memory.memory_jobs FROM shopping_memory_worker;
+GRANT SELECT ON memory.memory_jobs TO shopping_memory_worker;
+GRANT UPDATE (status, available_at, locked_at, locked_by,
+              last_error_code, updated_at)
+    ON memory.memory_jobs TO shopping_memory_worker;
 GRANT INSERT ON memory.audit_events TO shopping_memory_worker;
 
 GRANT EXECUTE ON FUNCTION memory.claim_memory_job(uuid)
     TO shopping_memory_poller;
 GRANT EXECUTE ON FUNCTION memory.reclaim_memory_jobs(interval)
     TO shopping_memory_poller;
+GRANT EXECUTE ON FUNCTION memory.retry_memory_job(uuid, interval, smallint)
+    TO shopping_memory_worker;
+GRANT EXECUTE ON FUNCTION memory.get_procedural_job_evidence(uuid)
+    TO shopping_memory_worker;
 GRANT EXECUTE ON FUNCTION memory.activate_prompt(uuid, text, uuid, bigint, uuid, uuid)
     TO shopping_memory_api;
 GRANT EXECUTE ON FUNCTION memory.rollback_prompt(uuid, text, uuid, bigint, uuid, uuid)
     TO shopping_memory_api;
+GRANT EXECUTE ON FUNCTION memory.get_active_prompt(text)
+    TO shopping_memory_api, shopping_memory_worker;
 GRANT EXECUTE ON FUNCTION memory.mark_expired_memories(timestamptz)
     TO shopping_memory_maintenance;
 GRANT EXECUTE ON FUNCTION memory.purge_expired_rows(timestamptz, interval)

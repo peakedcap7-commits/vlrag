@@ -55,8 +55,11 @@ class MemorySchemaStaticTest(unittest.TestCase):
         for function in (
             "claim_memory_job",
             "reclaim_memory_jobs",
+            "retry_memory_job",
+            "get_procedural_job_evidence",
             "activate_prompt",
             "rollback_prompt",
+            "get_active_prompt",
             "mark_expired_memories",
             "purge_expired_rows",
         ):
@@ -106,8 +109,63 @@ class MemorySchemaStaticTest(unittest.TestCase):
 
     def test_backend_function_signatures_are_stable(self):
         self.assertIn("memory.claim_memory_job(\n    p_worker_id uuid", self.sql)
+        self.assertIn("memory.retry_memory_job(\n    p_job_id uuid", self.sql)
+        self.assertIn(
+            "memory.get_procedural_job_evidence(\n    p_job_id uuid", self.sql
+        )
         self.assertIn("memory.activate_prompt(\n    p_tenant_id uuid", self.sql)
+        self.assertIn("memory.get_active_prompt(\n    p_prompt_key text", self.sql)
         self.assertIn("p_expected_generation bigint", self.sql)
+
+    def test_retry_only_releases_the_current_workers_job(self):
+        body = self.sql.split("FUNCTION memory.retry_memory_job", 1)[1].split("$$;", 1)[
+            0
+        ]
+        self.assertIn("job.status = 'running'", body)
+        self.assertIn("job.locked_by = memory.current_worker_id()", body)
+        self.assertIn("job.attempts < p_max_attempts", body)
+        self.assertIn("status = 'pending'", body)
+        self.assertIn("locked_by = NULL", body)
+
+    def test_procedural_evidence_is_claim_scoped_and_redacted(self):
+        body = self.sql.split("FUNCTION memory.get_procedural_job_evidence", 1)[
+            1
+        ].split("$$;", 1)[0]
+        self.assertIn("job.job_type = 'procedural_optimize'", body)
+        self.assertIn("job.locked_by = memory.current_worker_id()", body)
+        self.assertIn("job.payload -> 'run_ids'", body)
+        self.assertIn("feedback.event", body)
+        self.assertIn("feedback.rating", body)
+        self.assertNotIn("feedback.comment", body)
+        self.assertNotIn("thread.user_id", body)
+        self.assertIn(
+            "REVOKE UPDATE ON memory.memory_jobs FROM shopping_memory_worker",
+            self.sql,
+        )
+
+    def test_active_prompt_uses_approved_pointer_without_table_select(self):
+        body = self.sql.split("FUNCTION memory.get_active_prompt", 1)[1].split(
+            "$$;", 1
+        )[0]
+        self.assertIn("version.status = 'approved'", body)
+        self.assertIn("active.tenant_id = memory.current_tenant_id()", body)
+        self.assertIn("REVOKE SELECT ON memory.procedural_prompt_versions", self.sql)
+        self.assertIn(
+            "GRANT EXECUTE ON FUNCTION memory.get_active_prompt(text)", self.sql
+        )
+
+    def test_episode_worker_and_admin_scopes_are_narrow(self):
+        worker_policy = self.sql.split("CREATE POLICY episodic_worker_all", 1)[1].split(
+            "DROP POLICY", 1
+        )[0]
+        self.assertIn("scope = 'user'", worker_policy)
+        self.assertIn("scope = 'tenant'", worker_policy)
+        self.assertIn("status = 'pending'", worker_policy)
+        admin_policy = self.sql.split("CREATE POLICY episodic_api_update", 1)[1].split(
+            "DROP POLICY", 1
+        )[0]
+        self.assertIn("status = 'pending'", admin_policy)
+        self.assertIn("status IN ('active', 'rejected')", admin_policy)
 
 
 @unittest.skipUnless(
