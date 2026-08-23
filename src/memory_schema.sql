@@ -1096,6 +1096,60 @@ BEGIN
 END
 $$;
 
+CREATE OR REPLACE FUNCTION memory.list_prompt_versions(
+    p_prompt_key text
+)
+RETURNS TABLE (
+    version_id uuid,
+    parent_version_id uuid,
+    content text,
+    status text,
+    evidence_summary jsonb,
+    evaluation_metrics jsonb,
+    created_by uuid,
+    approved_by uuid,
+    created_at timestamptz,
+    approved_at timestamptz,
+    is_active boolean,
+    current_generation bigint
+)
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = pg_catalog, memory, public
+AS $$
+BEGIN
+    IF memory.current_tenant_id() IS NULL
+       OR memory.current_app_role() <> 'tenant_admin' THEN
+        RAISE EXCEPTION '仅 tenant_admin 可列出程序版本';
+    END IF;
+    IF p_prompt_key IS NULL OR btrim(p_prompt_key) = '' THEN
+        RAISE EXCEPTION 'prompt_key 不能为空';
+    END IF;
+
+    RETURN QUERY
+    SELECT version.version_id,
+           version.parent_version_id,
+           version.content,
+           version.status,
+           version.evidence_summary,
+           version.evaluation_metrics,
+           version.created_by,
+           version.approved_by,
+           version.created_at,
+           version.approved_at,
+           active.version_id IS NOT NULL,
+           active.generation
+    FROM memory.procedural_prompt_versions version
+    LEFT JOIN memory.procedural_prompt_active active
+      ON active.tenant_id = version.tenant_id
+     AND active.prompt_key = version.prompt_key
+     AND active.version_id = version.version_id
+    WHERE version.tenant_id = memory.current_tenant_id()
+      AND version.prompt_key = p_prompt_key
+    ORDER BY version.created_at DESC, version.version_id;
+END
+$$;
+
 CREATE OR REPLACE FUNCTION memory.mark_expired_memories(
     p_now timestamptz DEFAULT now()
 )
@@ -1186,6 +1240,7 @@ REVOKE ALL ON FUNCTION memory._switch_prompt(uuid, text, uuid, bigint, uuid, uui
 REVOKE ALL ON FUNCTION memory.activate_prompt(uuid, text, uuid, bigint, uuid, uuid) FROM PUBLIC;
 REVOKE ALL ON FUNCTION memory.rollback_prompt(uuid, text, uuid, bigint, uuid, uuid) FROM PUBLIC;
 REVOKE ALL ON FUNCTION memory.get_active_prompt(text) FROM PUBLIC;
+REVOKE ALL ON FUNCTION memory.list_prompt_versions(text) FROM PUBLIC;
 REVOKE ALL ON FUNCTION memory.mark_expired_memories(timestamptz) FROM PUBLIC;
 REVOKE ALL ON FUNCTION memory.purge_expired_rows(timestamptz, interval) FROM PUBLIC;
 
@@ -1248,6 +1303,8 @@ GRANT EXECUTE ON FUNCTION memory.rollback_prompt(uuid, text, uuid, bigint, uuid,
     TO shopping_memory_api;
 GRANT EXECUTE ON FUNCTION memory.get_active_prompt(text)
     TO shopping_memory_api, shopping_memory_worker;
+GRANT EXECUTE ON FUNCTION memory.list_prompt_versions(text)
+    TO shopping_memory_api;
 GRANT EXECUTE ON FUNCTION memory.mark_expired_memories(timestamptz)
     TO shopping_memory_maintenance;
 GRANT EXECUTE ON FUNCTION memory.purge_expired_rows(timestamptz, interval)

@@ -60,6 +60,7 @@ class MemorySchemaStaticTest(unittest.TestCase):
             "activate_prompt",
             "rollback_prompt",
             "get_active_prompt",
+            "list_prompt_versions",
             "mark_expired_memories",
             "purge_expired_rows",
         ):
@@ -115,6 +116,7 @@ class MemorySchemaStaticTest(unittest.TestCase):
         )
         self.assertIn("memory.activate_prompt(\n    p_tenant_id uuid", self.sql)
         self.assertIn("memory.get_active_prompt(\n    p_prompt_key text", self.sql)
+        self.assertIn("memory.list_prompt_versions(\n    p_prompt_key text", self.sql)
         self.assertIn("p_expected_generation bigint", self.sql)
 
     def test_retry_only_releases_the_current_workers_job(self):
@@ -152,6 +154,25 @@ class MemorySchemaStaticTest(unittest.TestCase):
         self.assertIn("REVOKE SELECT ON memory.procedural_prompt_versions", self.sql)
         self.assertIn(
             "GRANT EXECUTE ON FUNCTION memory.get_active_prompt(text)", self.sql
+        )
+
+    def test_prompt_version_listing_is_admin_only_and_tenant_scoped(self):
+        body = self.sql.split("FUNCTION memory.list_prompt_versions", 1)[1].split(
+            "$$;", 1
+        )[0]
+        self.assertIn("memory.current_app_role() <> 'tenant_admin'", body)
+        self.assertIn("version.tenant_id = memory.current_tenant_id()", body)
+        self.assertIn("active.version_id IS NOT NULL", body)
+        self.assertIn("active.generation", body)
+        self.assertIn(
+            "GRANT EXECUTE ON FUNCTION memory.list_prompt_versions(text)\n"
+            "    TO shopping_memory_api",
+            self.sql,
+        )
+        self.assertNotIn(
+            "GRANT EXECUTE ON FUNCTION memory.list_prompt_versions(text)\n"
+            "    TO shopping_memory_worker",
+            self.sql,
         )
 
     def test_episode_worker_and_admin_scopes_are_narrow(self):
