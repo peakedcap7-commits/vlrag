@@ -58,3 +58,12 @@
 
 - 配置发现、并行调度、App 活动可见、禁止递归派生、只读约束和 Git 零污染均有实际证据。
 - 多 Agent 开发基础设施验收通过。
+
+## 2026-08-24 记忆、JWT 与 Docker 验收记录
+
+- 本地回归：199 passed、11 skipped、117 subtests；最终关键门禁 43 passed、5 个需真实 DSN 的条件测试。
+- 真实 PG16/pgvector：22 passed、25 subtests；跨租户/同租户跨用户 RLS、claim/complete/retry、租约恢复、权限矩阵和情景重放幂等通过。
+- Docker：单一 CPU-only 镜像真实 build exit 0；容器内 Torch 2.6.0+cpu、CUDA None；PostgreSQL、MinIO、Neo4j healthy，migration exit 0。
+- JWT：缺失令牌 401、合法令牌 200；容器 token CLI 已验证可启动。
+- 外部限制：未提供有效 `DASHSCOPE_API_KEY`，因此 bootstrap 明确返回 invalid_api_key，readiness 保持 data_not_ready；不将其记录为演示索引就绪。
+- reviewer 最终复审无 P0/P1；功能开发与开发部署门禁通过，完整演示数据初始化需使用者在 `.env` 配置有效百炼密钥。

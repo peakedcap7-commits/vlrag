@@ -1,6 +1,6 @@
 # ShoppingQnA Agent 任务看板
 
-- 最后更新时间：2026-07-23
+- 最后更新时间：2026-08-24
 - 对应提交：以当前 Git HEAD 为准
 - 维护者：主 Agent
 - 状态：已生效
@@ -8,16 +8,16 @@
 ## 当前任务
 
 - 任务：多租户四类记忆、开发 JWT 与 Docker 一键部署。
-- 当前阶段：架构方案和数据库技术评审已完成，进入实现阶段。
+- 当前阶段：已完成。
 
 ## Agent 状态
 
 | Agent | 状态 | 当前任务 | 分支或 Worktree | 是否阻塞 |
 |---|---|---|---|---|
-| 主 Agent | 进行中 | 集成记忆、JWT、数据库迁移与 Docker | main / 当前工作区 | 否 |
+| 主 Agent | 已完成 | 集成记忆、JWT、数据库迁移与 Docker | main / 当前工作区 | 否 |
 | architect | 已完成 | 记忆、JWT 与 Docker 设计 | 主工作区（仅设计文档） | 否 |
-| database | 待开始 | migration、RLS 与数据库函数 | 独立 Worktree | 否 |
-| backend | 待开始 | JWT、记忆服务、worker、API 与 Docker | 独立 Worktree | 否 |
+| database | 已完成 | migration、RLS 与数据库函数 | 独立 Worktree | 否 |
+| backend | 已完成 | JWT、记忆服务、worker、API 与 Docker | 独立 Worktree | 否 |
 
 ## 文件所有权
 

@@ -1,6 +1,6 @@
 # ShoppingQnA 数据存储规则
 
-- 最后更新时间：2026-07-23
+- 最后更新时间：2026-08-24
 - 对应提交：以当前 Git HEAD 为准
 - 维护者：主 Agent，database 负责评审
 - 状态：已生效
@@ -18,6 +18,8 @@
 - 用户上传图片使用隔离前缀 `uploads/{session_id}/{image_id}.jpg`，由服务端生成对象键并校验会话归属；开发期 TTL 为 24 小时。
 - 用户上传图片只允许临时保存和临时向量化，不写入 `products_text_v3_v1`、`products_image_cnclip_v1` 或 Polyvore 商品库。清理任务与生产鉴权尚未实现，必须在上线前补齐。
 - M2-A/B 使用 `products_image_cnclip_v1` 执行只读 Top-3 相似查询；用户图片向量只存在于请求内存，当前存储数量和 schema 均未改变。
+- PostgreSQL/pgvector 新增九张 `memory` schema 业务表，全部 FORCE RLS；API、worker、poller、maintenance 与 migrator 使用独立角色。
+- `memory_jobs` 使用 10 分钟租约和最多 3 次领取；情景记忆以 `(tenant_id, source_job_id, scope, source_item_index)` 部分唯一键保证重放幂等。
 - M2-C 使用 Neo4j 只读查询跨输入图候选的共享 `Outfit`，未增加节点、关系、约束或索引，也未改变现有计数。
 - M3-B 只读查询 `products_text_v3_v1` 召回替换候选，不写入任何 collection，也不查询 Neo4j。
 - Neo4j：本机 `shopping-neo4j` 保存 Polyvore 最小图切片。

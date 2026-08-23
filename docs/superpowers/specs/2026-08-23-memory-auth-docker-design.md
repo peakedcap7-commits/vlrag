@@ -220,11 +220,12 @@ PostgresStore 曾出现 namespace prefix 越界问题；即使使用修复版本
 - `scope`（user/tenant）
 - `observation`、`action`、`result`
 - `source_run_id`、`source_feedback_id`
+- `source_job_id`、`source_item_index`（worker 重放幂等键；旧数据可为空）
 - `embedding` vector(1024)
 - `status`（pending/active/rejected/deleted）
 - `reviewed_by`、`reviewed_at`
 - `created_at`、`updated_at`、`deleted_at`
-- 概念约束：user scope 必须有 owner；tenant scope 必须经过审核才能 active
+- 概念约束：user scope 必须有 owner；tenant scope 必须经过审核才能 active；同 job/scope/item index 只能落一条
 
 ### 7.6 `procedural_prompt_versions`
 
@@ -249,7 +250,7 @@ PostgresStore 曾出现 namespace prefix 越界问题；即使使用修复版本
 - `status`（pending/running/done/failed）
 - `attempts`、`available_at`、`locked_at`、`locked_by`、`last_error_code`
 - `created_at`、`updated_at`
-- 概念约束：同来源/任务类型幂等；使用 `FOR UPDATE SKIP LOCKED` 领取；错误只存安全类型
+- 概念约束：同来源/任务类型幂等；使用 `FOR UPDATE SKIP LOCKED` 领取；10 分钟租约过期后自动恢复，最多领取 3 次；错误只存安全类型
 
 ### 7.9 `audit_events`
 
@@ -445,4 +446,3 @@ database 在写最终 DDL 前必须确认：
 7. prompt active pointer 的原子激活、并发检查和回滚；
 8. migration owner、API role、worker role 的权限分离；
 9. forward migration、测试环境 rollback、备份恢复和不删除已有数据的路径。
-

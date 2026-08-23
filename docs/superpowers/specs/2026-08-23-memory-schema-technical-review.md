@@ -144,6 +144,8 @@
 | `result` | `text` | NOT NULL |
 | `source_run_id` | `uuid` | NULL |
 | `source_feedback_id` | `uuid` | NULL |
+| `source_job_id` | `uuid` | NULL；旧数据兼容，worker 新写入必须提供 |
+| `source_item_index` | `smallint` | NULL；与 source_job_id 成对为空或成对非空，>= 0 |
 | `embedding` | `vector(1024)` | NULL；未删除时必须存在，用户删除时清空 |
 | `status` | `text` | NOT NULL，`pending/active/rejected/deleted` |
 | `reviewed_by` | `uuid` | NULL |
@@ -155,8 +157,9 @@
 
 - PK：`(tenant_id, memory_id)`。
 - FK：source run/feedback 分别引用对应复合 PK，使用 `ON DELETE SET NULL (source_run_id)` / `ON DELETE SET NULL (source_feedback_id)`，保留 tenant_id。
-- CHECK：三段文本非空；`scope='user'` 等价于 owner 非空；tenant scope 的 active/rejected 必须有 reviewer 和 reviewed_at；未删除时 embedding 必须存在、deleted 时必须为空；删除状态与 deleted_at 一致。
-- 索引：用户读取 `(tenant_id, owner_user_id, status)`；共享读取 `(tenant_id, status) WHERE scope='tenant'`；清理 `(expires_at) WHERE status IN ('pending','active')` 和 `(deleted_at) WHERE status='deleted'`。
+- CHECK：三段文本非空；`scope='user'` 等价于 owner 非空；tenant scope 的 active/rejected 必须有 reviewer 和 reviewed_at；未删除时 embedding 必须存在、deleted 时必须为空；删除状态与 deleted_at 一致；source job 与 item index 必须成对出现。
+- 索引：用户读取 `(tenant_id, owner_user_id, status)`；共享读取 `(tenant_id, status) WHERE scope='tenant'`；清理 `(expires_at) WHERE status IN ('pending','active')` 和 `(deleted_at) WHERE status='deleted'`；重放幂等使用部分唯一索引 `(tenant_id, source_job_id, scope, source_item_index) WHERE source_job_id IS NOT NULL`。
+- 不给 `source_job_id` 建 FK：job 是短 TTL 队列记录，episode 生命周期更长，FK 会阻塞正常清理。
 - 首版不建 ANN；private 与 tenant shared 分两次精确查询，各 LIMIT 1..3。
 
 ### 3.6 `procedural_prompt_versions`
@@ -227,6 +230,7 @@
 - UNIQUE：`(tenant_id, job_type, dedupe_key)`；它同时覆盖有/无 source run 的幂等，不再增加部分唯一索引。
 - CHECK：payload 是 object；running 时 lock 两列必须存在，其他状态 lock 两列必须为空；`attempts >= 0`。
 - 领取索引：`(available_at, created_at) WHERE status='pending'`。这是唯一跨租户索引。
+- 崩溃恢复：claim 在同一受控事务内回收超过 10 分钟的 running lease；`attempts < 3` 回 pending 并重新领取，`attempts >= 3` 置 failed。poller 不获得通用 reclaim 函数权限。
 - 租户运维索引：`(tenant_id, status, updated_at)`；清理索引 `(expires_at) WHERE status IN ('done','failed')`。
 
 ### 3.9 `audit_events`

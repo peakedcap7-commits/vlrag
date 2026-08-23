@@ -1,6 +1,6 @@
 # ShoppingQnA 架构边界
 
-- 最后更新时间：2026-07-23
+- 最后更新时间：2026-08-24
 - 对应提交：以当前 Git HEAD 为准
 - 维护者：主 Agent，architect 负责评审
 - 状态：已生效
@@ -124,3 +124,5 @@ llm
 - `performance` 提供同步轻量计时和结构化日志；API middleware 记录总耗时，各 service/provider 只记录自身外部依赖阶段，不向响应 schema 注入 debug 字段。
 - M2/M3 advice 保持 LLM 主路径；格式修复只处理 JSON 结构、不改变语义。网络、超时或二次解析失败时由各 advice service 生成同 schema 的保守 fallback，且不得重新选品、改序或补充未知属性。
 - Chinese-CLIP 模型位置由 `CHINESE_CLIP_MODEL` 配置；本机可指向已缓存目录以稳定冷启动，示例配置不得固化真实凭据。
+- API 从开发 JWT 获取 tenant/user/roles；`memory` 只通过显式租户上下文访问 PostgreSQL，`memory_worker` 使用 LangMem Core API 和 PostgreSQL job，不引入 Redis/Celery。
+- Docker Compose 复用单一 CPU-only 应用镜像，PostgreSQL、MinIO、Neo4j、migration、bootstrap、API 与 worker 按健康/完成条件启动。

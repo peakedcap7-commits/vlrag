@@ -1,6 +1,6 @@
 # ShoppingQnA 当前项目状态
 
-- 最后更新时间：2026-07-23
+- 最后更新时间：2026-08-24
 - 对应提交：以当前 Git HEAD 为准
 - 维护者：主 Agent
 - 状态：已生效
@@ -80,3 +80,4 @@
 - 关键 API 链路已使用结构化 INFO 日志记录 `total_ms`、预热、MinIO、Embedding、Chroma、Neo4j 与文本 LLM 耗时；日志不改变正式响应契约，也不记录密钥或业务正文。
 - M2/M3 advice 的 qwen-turbo 显式使用 12 秒超时和一次传输重试；首次 JSON/schema 失败最多执行一次格式修复，最终失败返回仅基于既有事实的安全 fallback，并记录完整诊断字段。
 - 本机开发环境通过 `CHINESE_CLIP_MODEL` 指向已缓存模型目录，避免预热时回退到 HuggingFace 远程解析；`.env.example` 仅提供路径占位示例。
+- 已加入开发 JWT、多租户短期/语义/情景/程序记忆、LangMem worker 与 Docker Compose；真实 PG16/pgvector RLS、任务恢复和 CPU-only 镜像构建已验证。完整演示索引仍要求有效 `DASHSCOPE_API_KEY`。
