@@ -61,6 +61,7 @@ class MemorySchemaStaticTest(unittest.TestCase):
             "rollback_prompt",
             "get_active_prompt",
             "list_prompt_versions",
+            "approve_prompt",
             "mark_expired_memories",
             "purge_expired_rows",
         ):
@@ -117,6 +118,7 @@ class MemorySchemaStaticTest(unittest.TestCase):
         self.assertIn("memory.activate_prompt(\n    p_tenant_id uuid", self.sql)
         self.assertIn("memory.get_active_prompt(\n    p_prompt_key text", self.sql)
         self.assertIn("memory.list_prompt_versions(\n    p_prompt_key text", self.sql)
+        self.assertIn("memory.approve_prompt(\n    p_prompt_key text", self.sql)
         self.assertIn("p_expected_generation bigint", self.sql)
 
     def test_retry_only_releases_the_current_workers_job(self):
@@ -172,6 +174,24 @@ class MemorySchemaStaticTest(unittest.TestCase):
         self.assertNotIn(
             "GRANT EXECUTE ON FUNCTION memory.list_prompt_versions(text)\n"
             "    TO shopping_memory_worker",
+            self.sql,
+        )
+
+    def test_prompt_approval_is_atomic_audited_and_not_direct_update(self):
+        body = self.sql.split("FUNCTION memory.approve_prompt", 1)[1].split("$$;", 1)[0]
+        self.assertIn("memory.current_app_role() <> 'tenant_admin'", body)
+        self.assertIn("memory.current_user_id() IS DISTINCT FROM p_actor_user_id", body)
+        self.assertIn("version.tenant_id = memory.current_tenant_id()", body)
+        self.assertIn("version.status IN ('draft', 'review')", body)
+        self.assertIn("IF approved THEN", body)
+        self.assertIn("'prompt_approved'", body)
+        self.assertIn(
+            "REVOKE UPDATE ON memory.procedural_prompt_versions "
+            "FROM shopping_memory_api",
+            self.sql,
+        )
+        self.assertIn(
+            "GRANT EXECUTE ON FUNCTION memory.approve_prompt(text, uuid, uuid, uuid)",
             self.sql,
         )
 

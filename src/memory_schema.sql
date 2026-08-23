@@ -1150,6 +1150,54 @@ BEGIN
 END
 $$;
 
+CREATE OR REPLACE FUNCTION memory.approve_prompt(
+    p_prompt_key text,
+    p_version_id uuid,
+    p_actor_user_id uuid,
+    p_event_id uuid
+)
+RETURNS boolean
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = pg_catalog, memory, public
+AS $$
+DECLARE
+    approved boolean;
+BEGIN
+    IF memory.current_tenant_id() IS NULL
+       OR memory.current_app_role() <> 'tenant_admin'
+       OR memory.current_user_id() IS DISTINCT FROM p_actor_user_id THEN
+        RAISE EXCEPTION '仅当前 tenant_admin 可批准程序版本';
+    END IF;
+    IF p_prompt_key IS NULL OR btrim(p_prompt_key) = '' THEN
+        RAISE EXCEPTION 'prompt_key 不能为空';
+    END IF;
+
+    UPDATE memory.procedural_prompt_versions version
+    SET status = 'approved',
+        approved_by = p_actor_user_id,
+        approved_at = now()
+    WHERE version.tenant_id = memory.current_tenant_id()
+      AND version.prompt_key = p_prompt_key
+      AND version.version_id = p_version_id
+      AND version.status IN ('draft', 'review');
+    approved := FOUND;
+
+    IF approved THEN
+        INSERT INTO memory.audit_events (
+            tenant_id, event_id, actor_user_id, actor_type, action,
+            resource_type, resource_id, details, expires_at
+        ) VALUES (
+            memory.current_tenant_id(), p_event_id, p_actor_user_id, 'user',
+            'prompt_approved', 'procedural_prompt', p_prompt_key,
+            jsonb_build_object('version_id', p_version_id),
+            now() + interval '365 days'
+        );
+    END IF;
+    RETURN approved;
+END
+$$;
+
 CREATE OR REPLACE FUNCTION memory.mark_expired_memories(
     p_now timestamptz DEFAULT now()
 )
@@ -1241,6 +1289,7 @@ REVOKE ALL ON FUNCTION memory.activate_prompt(uuid, text, uuid, bigint, uuid, uu
 REVOKE ALL ON FUNCTION memory.rollback_prompt(uuid, text, uuid, bigint, uuid, uuid) FROM PUBLIC;
 REVOKE ALL ON FUNCTION memory.get_active_prompt(text) FROM PUBLIC;
 REVOKE ALL ON FUNCTION memory.list_prompt_versions(text) FROM PUBLIC;
+REVOKE ALL ON FUNCTION memory.approve_prompt(text, uuid, uuid, uuid) FROM PUBLIC;
 REVOKE ALL ON FUNCTION memory.mark_expired_memories(timestamptz) FROM PUBLIC;
 REVOKE ALL ON FUNCTION memory.purge_expired_rows(timestamptz, interval) FROM PUBLIC;
 
@@ -1271,8 +1320,7 @@ REVOKE SELECT ON memory.procedural_prompt_versions,
     memory.procedural_prompt_active
     FROM shopping_memory_api, shopping_memory_worker;
 GRANT INSERT ON memory.procedural_prompt_versions TO shopping_memory_api;
-GRANT UPDATE (status, approved_by, approved_at)
-    ON memory.procedural_prompt_versions TO shopping_memory_api;
+REVOKE UPDATE ON memory.procedural_prompt_versions FROM shopping_memory_api;
 GRANT SELECT, INSERT ON memory.memory_jobs TO shopping_memory_api;
 GRANT SELECT, INSERT ON memory.audit_events TO shopping_memory_api;
 
@@ -1304,6 +1352,8 @@ GRANT EXECUTE ON FUNCTION memory.rollback_prompt(uuid, text, uuid, bigint, uuid,
 GRANT EXECUTE ON FUNCTION memory.get_active_prompt(text)
     TO shopping_memory_api, shopping_memory_worker;
 GRANT EXECUTE ON FUNCTION memory.list_prompt_versions(text)
+    TO shopping_memory_api;
+GRANT EXECUTE ON FUNCTION memory.approve_prompt(text, uuid, uuid, uuid)
     TO shopping_memory_api;
 GRANT EXECUTE ON FUNCTION memory.mark_expired_memories(timestamptz)
     TO shopping_memory_maintenance;
