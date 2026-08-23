@@ -2,7 +2,7 @@ import os
 import unittest
 from pathlib import Path
 from unittest.mock import patch
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 from src.memory_migrate import (
     LOGIN_ROLE_ENV,
@@ -169,6 +169,34 @@ class MemorySchemaStaticTest(unittest.TestCase):
         )
         self.assertIn(
             f"GRANT EXECUTE ON {signature}\n    TO shopping_memory_maintenance",
+            self.sql,
+        )
+
+    def test_claim_recovers_only_expired_leases(self):
+        body = self.sql.split("FUNCTION memory.claim_memory_job", 1)[1].split("$$;", 1)[
+            0
+        ]
+        self.assertIn("job.locked_at < now() - interval '10 minutes'", body)
+        self.assertIn("job.attempts < 3 THEN 'pending' ELSE 'failed'", body)
+        self.assertIn("'max_attempts_exceeded'", body)
+        self.assertIn("locked_at = NULL", body)
+        self.assertIn("locked_by = NULL", body)
+        self.assertIn(
+            "REVOKE EXECUTE ON FUNCTION memory.reclaim_memory_jobs(interval)\n"
+            "    FROM shopping_memory_poller",
+            self.sql,
+        )
+
+    def test_episode_source_items_are_forward_compatible_and_idempotent(self):
+        self.assertIn("ADD COLUMN IF NOT EXISTS source_job_id uuid", self.sql)
+        self.assertIn("ADD COLUMN IF NOT EXISTS source_item_index smallint", self.sql)
+        self.assertIn("CONSTRAINT episodic_source_item_pair_check CHECK", self.sql)
+        self.assertIn("source_item_index IS NOT NULL", self.sql)
+        self.assertIn("source_item_index >= 0", self.sql)
+        self.assertIn("(tenant_id, source_job_id, scope, source_item_index)", self.sql)
+        self.assertIn("WHERE source_job_id IS NOT NULL", self.sql)
+        self.assertNotIn(
+            "FOREIGN KEY (tenant_id, source_job_id)",
             self.sql,
         )
 
@@ -348,6 +376,148 @@ class MemorySchemaIntegrationTest(unittest.TestCase):
             cursor.execute("SET LOCAL ROLE shopping_memory_maintenance")
             cursor.execute("SELECT memory.reclaim_memory_jobs(interval '100 years')")
             self.assertEqual(cursor.fetchone()[0], 0)
+
+    def test_claim_recovers_crashed_jobs_and_stops_after_three_attempts(self):
+        tenant_id, user_id = str(uuid4()), str(uuid4())
+        retry_job_id, failed_job_id, healthy_job_id = (
+            str(uuid4()),
+            str(uuid4()),
+            str(uuid4()),
+        )
+        old_worker_id, new_worker_id = str(uuid4()), str(uuid4())
+        with (
+            self.psycopg.connect(self.dsn) as connection,
+            connection.cursor() as cursor,
+        ):
+            cursor.execute("SET LOCAL ROLE shopping_memory_owner")
+            cursor.execute(
+                """
+                INSERT INTO memory.memory_jobs (
+                    tenant_id, job_id, user_id, job_type, dedupe_key, status,
+                    attempts, available_at, locked_at, locked_by, expires_at
+                ) VALUES
+                    (%s, %s, %s, 'semantic_extract', %s, 'running', 1,
+                     now(), now() - interval '11 minutes', %s,
+                     now() + interval '1 day'),
+                    (%s, %s, %s, 'semantic_extract', %s, 'running', 3,
+                     now(), now() - interval '11 minutes', %s,
+                     now() + interval '1 day'),
+                    (%s, %s, %s, 'semantic_extract', %s, 'running', 1,
+                     now(), now() - interval '1 minute', %s,
+                     now() + interval '1 day')
+                """,
+                (
+                    tenant_id,
+                    retry_job_id,
+                    user_id,
+                    f"test-{retry_job_id}",
+                    old_worker_id,
+                    tenant_id,
+                    failed_job_id,
+                    user_id,
+                    f"test-{failed_job_id}",
+                    old_worker_id,
+                    tenant_id,
+                    healthy_job_id,
+                    user_id,
+                    f"test-{healthy_job_id}",
+                    old_worker_id,
+                ),
+            )
+
+        with (
+            self.psycopg.connect(self.dsn) as connection,
+            connection.cursor() as cursor,
+        ):
+            cursor.execute("SET LOCAL ROLE shopping_memory_poller")
+            cursor.execute(
+                "SELECT job_id FROM memory.claim_memory_job(%s)", (new_worker_id,)
+            )
+            self.assertEqual(str(cursor.fetchone()[0]), retry_job_id)
+
+        with (
+            self.psycopg.connect(self.dsn) as connection,
+            connection.cursor() as cursor,
+        ):
+            cursor.execute("SET LOCAL ROLE shopping_memory_owner")
+            cursor.execute(
+                """
+                SELECT job_id, status, attempts, locked_by, last_error_code
+                FROM memory.memory_jobs
+                WHERE tenant_id = %s
+                ORDER BY job_id
+                """,
+                (tenant_id,),
+            )
+            jobs = {str(row[0]): row[1:] for row in cursor.fetchall()}
+            self.assertEqual(
+                jobs[retry_job_id],
+                ("running", 2, UUID(new_worker_id), "lease_expired"),
+            )
+            self.assertEqual(
+                jobs[failed_job_id],
+                ("failed", 3, None, "max_attempts_exceeded"),
+            )
+            self.assertEqual(
+                jobs[healthy_job_id],
+                ("running", 1, UUID(old_worker_id), None),
+            )
+            cursor.execute(
+                "DELETE FROM memory.memory_jobs WHERE tenant_id = %s", (tenant_id,)
+            )
+
+    def test_episode_source_item_index_is_idempotent(self):
+        tenant_id, user_id = str(uuid4()), str(uuid4())
+        source_job_id = str(uuid4())
+        memory_ids = [str(uuid4()) for _ in range(3)]
+        insert_sql = """
+            INSERT INTO memory.episodic_memories (
+                tenant_id, memory_id, owner_user_id, scope,
+                observation, action, result, source_job_id, source_item_index,
+                embedding, status, expires_at
+            ) VALUES (
+                %s, %s, %s, 'user', 'observed', 'acted', 'succeeded', %s, %s,
+                array_fill(0::real, ARRAY[1024])::vector, 'active',
+                now() + interval '1 day'
+            )
+        """
+        with (
+            self.psycopg.connect(self.dsn) as connection,
+            connection.cursor() as cursor,
+        ):
+            cursor.execute("SET LOCAL ROLE shopping_memory_worker")
+            set_local_context(cursor, tenant_id, user_id, "worker", str(uuid4()))
+            cursor.execute(
+                insert_sql,
+                (tenant_id, memory_ids[0], user_id, source_job_id, 0),
+            )
+            cursor.execute(
+                insert_sql,
+                (tenant_id, memory_ids[1], user_id, source_job_id, 1),
+            )
+
+        with (
+            self.psycopg.connect(self.dsn) as connection,
+            connection.cursor() as cursor,
+        ):
+            cursor.execute("SET LOCAL ROLE shopping_memory_worker")
+            set_local_context(cursor, tenant_id, user_id, "worker", str(uuid4()))
+            with self.assertRaises(self.psycopg.errors.UniqueViolation):
+                cursor.execute(
+                    insert_sql,
+                    (tenant_id, memory_ids[2], user_id, source_job_id, 0),
+                )
+            connection.rollback()
+
+        with (
+            self.psycopg.connect(self.dsn) as connection,
+            connection.cursor() as cursor,
+        ):
+            cursor.execute("SET LOCAL ROLE shopping_memory_owner")
+            cursor.execute(
+                "DELETE FROM memory.episodic_memories WHERE tenant_id = %s",
+                (tenant_id,),
+            )
 
     def test_worker_completes_and_retries_only_through_functions(self):
         tenant_id, user_id = str(uuid4()), str(uuid4())

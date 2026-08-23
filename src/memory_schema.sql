@@ -201,6 +201,8 @@ CREATE TABLE IF NOT EXISTS memory.episodic_memories (
     result text NOT NULL,
     source_run_id uuid,
     source_feedback_id uuid,
+    source_job_id uuid,
+    source_item_index smallint,
     embedding public.vector(1024),
     status text NOT NULL,
     reviewed_by uuid,
@@ -218,6 +220,14 @@ CREATE TABLE IF NOT EXISTS memory.episodic_memories (
         ON DELETE SET NULL (source_feedback_id),
     CHECK (scope IN ('user', 'tenant')),
     CHECK ((scope = 'user') = (owner_user_id IS NOT NULL)),
+    CONSTRAINT episodic_source_item_pair_check CHECK (
+        (source_job_id IS NULL AND source_item_index IS NULL)
+        OR (
+            source_job_id IS NOT NULL
+            AND source_item_index IS NOT NULL
+            AND source_item_index >= 0
+        )
+    ),
     CHECK (btrim(observation) <> '' AND btrim(action) <> '' AND btrim(result) <> ''),
     CHECK (status IN ('pending', 'active', 'rejected', 'deleted')),
     CHECK (
@@ -232,6 +242,31 @@ CREATE TABLE IF NOT EXISTS memory.episodic_memories (
     ),
     CHECK (expires_at >= created_at)
 );
+
+ALTER TABLE memory.episodic_memories
+    ADD COLUMN IF NOT EXISTS source_job_id uuid;
+ALTER TABLE memory.episodic_memories
+    ADD COLUMN IF NOT EXISTS source_item_index smallint;
+DO $episodic_source_check$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1
+        FROM pg_constraint
+        WHERE conrelid = 'memory.episodic_memories'::regclass
+          AND conname = 'episodic_source_item_pair_check'
+    ) THEN
+        ALTER TABLE memory.episodic_memories
+            ADD CONSTRAINT episodic_source_item_pair_check CHECK (
+                (source_job_id IS NULL AND source_item_index IS NULL)
+                OR (
+                    source_job_id IS NOT NULL
+                    AND source_item_index IS NOT NULL
+                    AND source_item_index >= 0
+                )
+            );
+    END IF;
+END
+$episodic_source_check$;
 
 CREATE TABLE IF NOT EXISTS memory.memory_jobs (
     tenant_id uuid NOT NULL,
@@ -326,11 +361,18 @@ CREATE INDEX IF NOT EXISTS episodic_expires_idx
 CREATE INDEX IF NOT EXISTS episodic_deleted_idx
     ON memory.episodic_memories (deleted_at)
     WHERE status = 'deleted';
+CREATE UNIQUE INDEX IF NOT EXISTS episodic_source_item_dedupe_idx
+    ON memory.episodic_memories
+        (tenant_id, source_job_id, scope, source_item_index)
+    WHERE source_job_id IS NOT NULL;
 CREATE INDEX IF NOT EXISTS memory_jobs_claim_idx
     ON memory.memory_jobs (available_at, created_at)
     WHERE status = 'pending';
 CREATE INDEX IF NOT EXISTS memory_jobs_tenant_status_idx
     ON memory.memory_jobs (tenant_id, status, updated_at);
+CREATE INDEX IF NOT EXISTS memory_jobs_running_locked_idx
+    ON memory.memory_jobs (locked_at)
+    WHERE status = 'running';
 CREATE INDEX IF NOT EXISTS memory_jobs_expires_idx
     ON memory.memory_jobs (expires_at)
     WHERE status IN ('done', 'failed');
@@ -776,6 +818,22 @@ SECURITY DEFINER
 SET search_path = pg_catalog, memory, public
 AS $$
 BEGIN
+    UPDATE memory.memory_jobs job
+    SET status = CASE WHEN job.attempts < 3 THEN 'pending' ELSE 'failed' END,
+        available_at = CASE
+            WHEN job.attempts < 3 THEN now()
+            ELSE job.available_at
+        END,
+        locked_at = NULL,
+        locked_by = NULL,
+        updated_at = now(),
+        last_error_code = CASE
+            WHEN job.attempts < 3 THEN 'lease_expired'
+            ELSE 'max_attempts_exceeded'
+        END
+    WHERE job.status = 'running'
+      AND job.locked_at < now() - interval '10 minutes';
+
     RETURN QUERY
     WITH candidate AS (
         SELECT job.tenant_id, job.job_id
