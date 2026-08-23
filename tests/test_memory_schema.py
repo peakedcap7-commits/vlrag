@@ -56,6 +56,7 @@ class MemorySchemaStaticTest(unittest.TestCase):
             "claim_memory_job",
             "reclaim_memory_jobs",
             "retry_memory_job",
+            "complete_memory_job",
             "get_procedural_job_evidence",
             "activate_prompt",
             "rollback_prompt",
@@ -112,6 +113,12 @@ class MemorySchemaStaticTest(unittest.TestCase):
     def test_backend_function_signatures_are_stable(self):
         self.assertIn("memory.claim_memory_job(\n    p_worker_id uuid", self.sql)
         self.assertIn("memory.retry_memory_job(\n    p_job_id uuid", self.sql)
+        self.assertIn("p_max_attempts integer DEFAULT 3", self.sql)
+        self.assertIn(
+            "DROP FUNCTION IF EXISTS memory.retry_memory_job(uuid, interval, smallint)",
+            self.sql,
+        )
+        self.assertIn("memory.complete_memory_job(\n    p_job_id uuid", self.sql)
         self.assertIn(
             "memory.get_procedural_job_evidence(\n    p_job_id uuid", self.sql
         )
@@ -130,6 +137,29 @@ class MemorySchemaStaticTest(unittest.TestCase):
         self.assertIn("job.attempts < p_max_attempts", body)
         self.assertIn("status = 'pending'", body)
         self.assertIn("locked_by = NULL", body)
+
+    def test_completion_is_function_only_and_clears_the_lock(self):
+        body = self.sql.split("FUNCTION memory.complete_memory_job", 1)[1].split(
+            "$$;", 1
+        )[0]
+        self.assertIn("p_status NOT IN ('done', 'failed')", body)
+        self.assertIn("job.status = 'running'", body)
+        self.assertIn("job.locked_by = memory.current_worker_id()", body)
+        self.assertIn("locked_at = NULL", body)
+        self.assertIn("locked_by = NULL", body)
+        self.assertNotIn("CREATE POLICY jobs_worker_update", self.sql)
+        self.assertIn(
+            "REVOKE UPDATE ON memory.memory_jobs FROM shopping_memory_worker",
+            self.sql,
+        )
+        self.assertNotIn(
+            "GRANT UPDATE (status, available_at, locked_at, locked_by",
+            self.sql,
+        )
+        self.assertIn(
+            "GRANT EXECUTE ON FUNCTION memory.complete_memory_job(uuid, text, text)",
+            self.sql,
+        )
 
     def test_procedural_evidence_is_claim_scoped_and_redacted(self):
         body = self.sql.split("FUNCTION memory.get_procedural_job_evidence", 1)[
@@ -268,6 +298,126 @@ class MemorySchemaIntegrationTest(unittest.TestCase):
             cursor.execute(
                 "DELETE FROM memory.assistant_threads WHERE thread_id = %s",
                 (thread_id,),
+            )
+
+    def test_worker_completes_and_retries_only_through_functions(self):
+        tenant_id, user_id = str(uuid4()), str(uuid4())
+        worker_id, job_id, retry_job_id = str(uuid4()), str(uuid4()), str(uuid4())
+        with (
+            self.psycopg.connect(self.dsn) as connection,
+            connection.cursor() as cursor,
+        ):
+            cursor.execute("SET LOCAL ROLE shopping_memory_api")
+            set_local_context(cursor, tenant_id, user_id, "user")
+            cursor.execute(
+                """
+                INSERT INTO memory.memory_jobs (
+                    tenant_id, job_id, user_id, job_type, dedupe_key,
+                    available_at, expires_at
+                ) VALUES (
+                    %s, %s, %s, 'semantic_extract', %s,
+                    timestamptz '2000-01-01 00:00:00+00',
+                    now() + interval '1 day'
+                )
+                """,
+                (tenant_id, job_id, user_id, f"test-{job_id}"),
+            )
+
+        with (
+            self.psycopg.connect(self.dsn) as connection,
+            connection.cursor() as cursor,
+        ):
+            cursor.execute("SET LOCAL ROLE shopping_memory_poller")
+            cursor.execute(
+                "SELECT job_id FROM memory.claim_memory_job(%s)", (worker_id,)
+            )
+            self.assertEqual(str(cursor.fetchone()[0]), job_id)
+
+        with (
+            self.psycopg.connect(self.dsn) as connection,
+            connection.cursor() as cursor,
+        ):
+            cursor.execute("SET LOCAL ROLE shopping_memory_worker")
+            set_local_context(cursor, tenant_id, user_id, "worker", worker_id)
+            cursor.execute(
+                "SELECT memory.complete_memory_job(%s, 'done', NULL)", (job_id,)
+            )
+            self.assertTrue(cursor.fetchone()[0])
+            cursor.execute(
+                "SELECT memory.complete_memory_job(%s, 'done', NULL)", (job_id,)
+            )
+            self.assertFalse(cursor.fetchone()[0])
+
+        with (
+            self.psycopg.connect(self.dsn) as connection,
+            connection.cursor() as cursor,
+        ):
+            cursor.execute("SET LOCAL ROLE shopping_memory_api")
+            set_local_context(cursor, tenant_id, user_id, "user")
+            cursor.execute(
+                "SELECT status, locked_by FROM memory.memory_jobs WHERE job_id = %s",
+                (job_id,),
+            )
+            self.assertEqual(cursor.fetchone(), ("done", None))
+            cursor.execute(
+                """
+                INSERT INTO memory.memory_jobs (
+                    tenant_id, job_id, user_id, job_type, dedupe_key,
+                    available_at, expires_at
+                ) VALUES (
+                    %s, %s, %s, 'semantic_extract', %s,
+                    timestamptz '2000-01-01 00:00:00+00',
+                    now() + interval '1 day'
+                )
+                """,
+                (tenant_id, retry_job_id, user_id, f"test-{retry_job_id}"),
+            )
+
+        with (
+            self.psycopg.connect(self.dsn) as connection,
+            connection.cursor() as cursor,
+        ):
+            cursor.execute("SET LOCAL ROLE shopping_memory_poller")
+            cursor.execute(
+                "SELECT job_id FROM memory.claim_memory_job(%s)", (worker_id,)
+            )
+            self.assertEqual(str(cursor.fetchone()[0]), retry_job_id)
+
+        with (
+            self.psycopg.connect(self.dsn) as connection,
+            connection.cursor() as cursor,
+        ):
+            cursor.execute("SET LOCAL ROLE shopping_memory_worker")
+            set_local_context(cursor, tenant_id, user_id, "worker", worker_id)
+            cursor.execute(
+                "SELECT memory.retry_memory_job(%s, interval '1 minute', 3)",
+                (retry_job_id,),
+            )
+            self.assertTrue(cursor.fetchone()[0])
+
+        with (
+            self.psycopg.connect(self.dsn) as connection,
+            connection.cursor() as cursor,
+        ):
+            cursor.execute("SET LOCAL ROLE shopping_memory_api")
+            set_local_context(cursor, tenant_id, user_id, "user")
+            cursor.execute(
+                """
+                SELECT status, locked_by, attempts
+                FROM memory.memory_jobs WHERE job_id = %s
+                """,
+                (retry_job_id,),
+            )
+            self.assertEqual(cursor.fetchone(), ("pending", None, 1))
+
+        with (
+            self.psycopg.connect(self.dsn) as connection,
+            connection.cursor() as cursor,
+        ):
+            cursor.execute("SET LOCAL ROLE shopping_memory_owner")
+            cursor.execute(
+                "DELETE FROM memory.memory_jobs WHERE tenant_id = %s",
+                (tenant_id,),
             )
 
 

@@ -733,22 +733,6 @@ USING (
 );
 
 DROP POLICY IF EXISTS jobs_worker_update ON memory.memory_jobs;
-CREATE POLICY jobs_worker_update ON memory.memory_jobs
-FOR UPDATE TO shopping_memory_worker
-USING (
-    tenant_id = memory.current_tenant_id()
-    AND memory.current_app_role() = 'worker'
-    AND status = 'running'
-    AND locked_by = memory.current_worker_id()
-)
-WITH CHECK (
-    tenant_id = memory.current_tenant_id()
-    AND memory.current_app_role() = 'worker'
-    AND (
-        (status = 'running' AND locked_by = memory.current_worker_id() AND locked_at IS NOT NULL)
-        OR (status IN ('done', 'failed') AND locked_by IS NULL AND locked_at IS NULL)
-    )
-);
 
 DROP POLICY IF EXISTS audit_api_select ON memory.audit_events;
 CREATE POLICY audit_api_select ON memory.audit_events
@@ -844,10 +828,11 @@ BEGIN
 END
 $$;
 
+DROP FUNCTION IF EXISTS memory.retry_memory_job(uuid, interval, smallint);
 CREATE OR REPLACE FUNCTION memory.retry_memory_job(
     p_job_id uuid,
     p_delay interval DEFAULT interval '5 seconds',
-    p_max_attempts smallint DEFAULT 3
+    p_max_attempts integer DEFAULT 3
 )
 RETURNS boolean
 LANGUAGE plpgsql
@@ -884,6 +869,57 @@ BEGIN
       );
     retried := FOUND;
     RETURN retried;
+END
+$$;
+
+CREATE OR REPLACE FUNCTION memory.complete_memory_job(
+    p_job_id uuid,
+    p_status text,
+    p_error_code text DEFAULT NULL
+)
+RETURNS boolean
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = pg_catalog, memory, public
+AS $$
+DECLARE
+    completed boolean;
+BEGIN
+    IF memory.current_app_role() <> 'worker'
+       OR memory.current_tenant_id() IS NULL
+       OR memory.current_worker_id() IS NULL THEN
+        RAISE EXCEPTION '缺少 worker job 上下文';
+    END IF;
+    IF p_status NOT IN ('done', 'failed') THEN
+        RAISE EXCEPTION '完成状态只能是 done 或 failed';
+    END IF;
+    IF (p_status = 'done' AND p_error_code IS NOT NULL)
+       OR (
+           p_status = 'failed'
+           AND (
+               p_error_code IS NULL
+               OR p_error_code !~ '^[a-z0-9_]{1,64}$'
+           )
+       ) THEN
+        RAISE EXCEPTION 'error_code 与完成状态不匹配';
+    END IF;
+
+    UPDATE memory.memory_jobs job
+    SET status = p_status,
+        locked_at = NULL,
+        locked_by = NULL,
+        updated_at = now(),
+        last_error_code = p_error_code
+    WHERE job.tenant_id = memory.current_tenant_id()
+      AND job.job_id = p_job_id
+      AND job.status = 'running'
+      AND job.locked_by = memory.current_worker_id()
+      AND (
+          job.user_id = memory.current_user_id()
+          OR (job.user_id IS NULL AND memory.current_user_id() IS NULL)
+      );
+    completed := FOUND;
+    RETURN completed;
 END
 $$;
 
@@ -1282,7 +1318,8 @@ REVOKE ALL ON FUNCTION memory.current_app_role() FROM PUBLIC;
 REVOKE ALL ON FUNCTION memory.current_worker_id() FROM PUBLIC;
 REVOKE ALL ON FUNCTION memory.claim_memory_job(uuid) FROM PUBLIC;
 REVOKE ALL ON FUNCTION memory.reclaim_memory_jobs(interval) FROM PUBLIC;
-REVOKE ALL ON FUNCTION memory.retry_memory_job(uuid, interval, smallint) FROM PUBLIC;
+REVOKE ALL ON FUNCTION memory.retry_memory_job(uuid, interval, integer) FROM PUBLIC;
+REVOKE ALL ON FUNCTION memory.complete_memory_job(uuid, text, text) FROM PUBLIC;
 REVOKE ALL ON FUNCTION memory.get_procedural_job_evidence(uuid) FROM PUBLIC;
 REVOKE ALL ON FUNCTION memory._switch_prompt(uuid, text, uuid, bigint, uuid, uuid, text) FROM PUBLIC;
 REVOKE ALL ON FUNCTION memory.activate_prompt(uuid, text, uuid, bigint, uuid, uuid) FROM PUBLIC;
@@ -1332,16 +1369,15 @@ GRANT SELECT, INSERT, UPDATE ON memory.semantic_memories,
 GRANT INSERT ON memory.procedural_prompt_versions TO shopping_memory_worker;
 REVOKE UPDATE ON memory.memory_jobs FROM shopping_memory_worker;
 GRANT SELECT ON memory.memory_jobs TO shopping_memory_worker;
-GRANT UPDATE (status, available_at, locked_at, locked_by,
-              last_error_code, updated_at)
-    ON memory.memory_jobs TO shopping_memory_worker;
 GRANT INSERT ON memory.audit_events TO shopping_memory_worker;
 
 GRANT EXECUTE ON FUNCTION memory.claim_memory_job(uuid)
     TO shopping_memory_poller;
 GRANT EXECUTE ON FUNCTION memory.reclaim_memory_jobs(interval)
     TO shopping_memory_poller;
-GRANT EXECUTE ON FUNCTION memory.retry_memory_job(uuid, interval, smallint)
+GRANT EXECUTE ON FUNCTION memory.retry_memory_job(uuid, interval, integer)
+    TO shopping_memory_worker;
+GRANT EXECUTE ON FUNCTION memory.complete_memory_job(uuid, text, text)
     TO shopping_memory_worker;
 GRANT EXECUTE ON FUNCTION memory.get_procedural_job_evidence(uuid)
     TO shopping_memory_worker;
