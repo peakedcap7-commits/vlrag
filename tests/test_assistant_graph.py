@@ -118,6 +118,46 @@ class FakeOutfitReviseCandidateService:
 
 
 class AssistantGraphTest(unittest.TestCase):
+    def test_只有传入的已激活程序提示会记录版本(self):
+        from src.assistant_graph import build_assistant_graph
+
+        class OverlayAdvice:
+            def generate(self, _analysis, prompt_overlay=None):
+                return {
+                    "verdict": prompt_overlay or "baseline",
+                    "summary": "ok",
+                    "strengths": [],
+                    "issues": [],
+                    "suggestions": [],
+                }
+
+        graph = build_assistant_graph(
+            FakeService(),
+            FakeOutfitAnalyzeService(),
+            OverlayAdvice(),
+        )
+        base = {
+            "message": "分析",
+            "image_keys": ["a.jpg", "b.jpg"],
+            "conversation_state": None,
+            "top_k": 5,
+            "retrieval_limit": 5,
+        }
+        assert "active_prompt" not in graph.invoke(base)
+        result = graph.invoke(
+            {
+                **base,
+                "procedural_prompts": {
+                    "outfit_analyze": {"version_id": "v1", "content": "更简洁"}
+                },
+            }
+        )
+        assert result["result"]["verdict"] == "更简洁"
+        assert result["active_prompt"] == {
+            "prompt_key": "outfit_analyze",
+            "version_id": "v1",
+        }
+
     def test_规则路由覆盖五种意图(self):
         from src.assistant_graph import AssistantIntent, classify_intent
 

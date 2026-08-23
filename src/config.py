@@ -1,6 +1,7 @@
 # ShoppingQnA 多模态 RAG 购物助手 - 百炼平台版
 
 import os
+
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -38,6 +39,7 @@ ENABLE_MODEL_WARMUP = _parse_bool_env("ENABLE_MODEL_WARMUP")
 RETRIEVER_K = 5
 RERANK_TOP_K = 5
 CHROMA_PERSIST_DIR = "./chroma_data"
+CHROMA_PERSIST_DIR = os.getenv("CHROMA_PERSIST_DIR", CHROMA_PERSIST_DIR)
 
 # ===== MinIO 配置 =====
 MINIO_ENDPOINT = os.getenv("MINIO_ENDPOINT", "localhost:9000")
@@ -51,6 +53,26 @@ OUTFIT_PROVIDER = os.getenv("OUTFIT_PROVIDER", "neo4j").strip().lower()
 NEO4J_URI = os.getenv("NEO4J_URI", "bolt://localhost:7687")
 NEO4J_USER = os.getenv("NEO4J_USER", "neo4j")
 NEO4J_PASSWORD = os.getenv("NEO4J_PASSWORD")
+
+# ===== 开发认证与记忆 =====
+DEV_JWT_SECRET = os.getenv("DEV_JWT_SECRET")
+DEV_JWT_ISSUER = os.getenv("DEV_JWT_ISSUER", "shopping-qna-dev")
+DEV_JWT_AUDIENCE = os.getenv("DEV_JWT_AUDIENCE", "shopping-qna-api")
+DATABASE_URL = os.getenv("DATABASE_URL")
+MEMORY_POLLER_DATABASE_URL = os.getenv("MEMORY_POLLER_DATABASE_URL", DATABASE_URL)
+MEMORY_WORKER_DATABASE_URL = os.getenv("MEMORY_WORKER_DATABASE_URL", DATABASE_URL)
+MEMORY_READ_ENABLED = _parse_bool_env("MEMORY_READ_ENABLED", "true")
+MEMORY_WRITE_ENABLED = _parse_bool_env("MEMORY_WRITE_ENABLED", "true")
+SEMANTIC_MEMORY_ENABLED = _parse_bool_env(
+    "SEMANTIC_MEMORY_ENABLED", "true"
+)
+EPISODIC_MEMORY_ENABLED = _parse_bool_env(
+    "EPISODIC_MEMORY_ENABLED", "true"
+)
+PROCEDURAL_MEMORY_ENABLED = _parse_bool_env(
+    "PROCEDURAL_MEMORY_ENABLED", "true"
+)
+MEMORY_WORKER_ID = os.getenv("MEMORY_WORKER_ID")
 
 # ===== 数据配置 =====
 DATASET_NAME = "hahminlew/kream-product-blip-captions"

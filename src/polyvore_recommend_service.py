@@ -1,3 +1,4 @@
+import os
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -10,18 +11,12 @@ from src.polyvore_retrieval import retrieve_polyvore_query
 class PolyvoreRecommendConfig:
     """Polyvore 推荐服务的只读资源路径。"""
 
-    persist_dir: Path = Path("chroma_data")
-    valid_path: Path = Path(r"D:\datasets\polyvore-outfits\nondisjoint\valid.json")
-    sample_path: Path = Path("data/processed/polyvore_items_sample.jsonl")
-    neo4j_manifest_path: Path = Path(
-        "data/processed/polyvore_neo4j_items_manifest.jsonl"
-    )
-    retrieval_manifest_path: Path = Path(
-        "data/processed/polyvore_neo4j_items_retrieval.jsonl"
-    )
-    enriched_path: Path = Path(
-        "data/processed/polyvore_items_enriched_sample.jsonl"
-    )
+    persist_dir: Path = field(default_factory=lambda: Path(os.getenv("CHROMA_PERSIST_DIR", "chroma_data")))
+    valid_path: Path = field(default_factory=lambda: Path(os.getenv("POLYVORE_VALID_PATH", "data/processed/valid.json")))
+    sample_path: Path = field(default_factory=lambda: Path(os.getenv("POLYVORE_SAMPLE_PATH", "data/processed/polyvore_items_sample.jsonl")))
+    neo4j_manifest_path: Path = field(default_factory=lambda: Path(os.getenv("POLYVORE_NEO4J_MANIFEST_PATH", "data/processed/polyvore_neo4j_items_manifest.jsonl")))
+    retrieval_manifest_path: Path = field(default_factory=lambda: Path(os.getenv("POLYVORE_RETRIEVAL_MANIFEST_PATH", "data/processed/polyvore_neo4j_items_retrieval.jsonl")))
+    enriched_path: Path = field(default_factory=lambda: Path(os.getenv("POLYVORE_ENRICHED_PATH", "data/processed/polyvore_items_enriched_sample.jsonl")))
     outfit_provider: str = OUTFIT_PROVIDER
     neo4j_uri: str = NEO4J_URI
     neo4j_user: str = NEO4J_USER

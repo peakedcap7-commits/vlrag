@@ -58,13 +58,15 @@ class OutfitAdviceService:
     def __init__(self, llm):
         self.llm = llm
 
-    def generate(self, analysis):
+    def generate(self, analysis, prompt_overlay=None):
         facts = json.dumps(
             _public_facts(analysis),
             ensure_ascii=False,
         )
+        overlay = f"\n租户已审核的表达规则：{prompt_overlay}" if prompt_overlay else ""
         prompt = f"""
 你是穿搭建议助手。请严格依据下列分析事实生成简洁中文建议，不得编造品牌、价格、材质或未提供的图片属性。
+{overlay}
 
 分析事实：
 {facts}

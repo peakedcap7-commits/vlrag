@@ -1,4 +1,6 @@
+import os
 from dataclasses import dataclass
+from pathlib import Path
 from threading import Condition
 from time import perf_counter
 
@@ -32,6 +34,11 @@ class ApiRuntimeManager:
                 "status": self._status,
                 "warmup_seconds": self._warmup_seconds,
                 "error": self._error,
+                "data_status": (
+                    "ready"
+                    if Path(os.getenv("SEED_READY_FILE", "data/.seed-ready")).exists()
+                    else "data_not_ready"
+                ),
             }
 
     def warmup(self):

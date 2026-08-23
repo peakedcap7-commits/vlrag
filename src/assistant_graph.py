@@ -26,6 +26,9 @@ class AssistantState(TypedDict, total=False):
     status: str
     result: dict[str, Any] | None
     response_message: str
+    memory_context: dict[str, Any]
+    procedural_prompts: dict[str, Any]
+    active_prompt: dict[str, Any]
 
 
 REVISION_KEYWORDS = (
@@ -104,21 +107,58 @@ def build_assistant_graph(
     outfit_revise_graph_service=None,
     outfit_revise_advice_service=None,
 ):
-    """注入现有推荐 service，并编译无持久记忆的同步流程图。"""
+    """注入现有 service；持久化仍由 HTTP 边界的 memory service 负责。"""
+
+    def remembered_message(state):
+        message = state.get("message", "").strip()
+        context = state.get("memory_context") or {}
+        preferences = context.get("semantic") or []
+        episodes = context.get("episodic") or []
+        additions = []
+        if preferences:
+            additions.append(
+                "长期偏好（仅作软偏好，当前要求优先）："
+                + "；".join(
+                    f"{item['dimension']}:{'偏好' if item['polarity'] == 1 else '避免'}{item['value']}"
+                    for item in preferences
+                )
+            )
+        if episodes:
+            additions.append(
+                "已验证案例："
+                + "；".join(f"{item['observation']}→{item['action']}→{item['result']}" for item in episodes)
+            )
+        return message if not additions else message + "\n" + "\n".join(additions)
+
+    def prompt_overlay(state, key):
+        prompt = (state.get("procedural_prompts") or {}).get(key)
+        return prompt["content"] if prompt else None
+
+    def active_prompt(state, key):
+        prompt = (state.get("procedural_prompts") or {}).get(key)
+        return (
+            {"prompt_key": key, "version_id": prompt["version_id"]}
+            if prompt
+            else None
+        )
 
     def single_item_recommend_node(state):
-        message = state.get("message", "").strip()
+        message = remembered_message(state)
         if not message:
             return _not_ready("单图推荐能力尚未接入。")
-        return {
+        result = service.recommend(
+            message,
+            state["top_k"],
+            state["retrieval_limit"],
+        )
+        if isinstance(result, dict) and "query" in result:
+            result = {**result, "query": state.get("message", "").strip()}
+        output = {
             "status": "ok",
-            "result": service.recommend(
-                message,
-                state["top_k"],
-                state["retrieval_limit"],
-            ),
+            "result": result,
             "response_message": "推荐完成。",
         }
+        return output
 
     def outfit_analyze_node(state):
         if outfit_analyze_service is None:
@@ -126,11 +166,22 @@ def build_assistant_graph(
         if outfit_advice_service is None:
             return _not_ready("穿搭建议服务尚未接入。")
         analysis = outfit_analyze_service.analyze(state["image_keys"])
-        return {
+        overlay = prompt_overlay(state, "outfit_analyze")
+        output = {
             "status": "ok",
-            "result": outfit_advice_service.generate(analysis),
+            "result": (
+                outfit_advice_service.generate(
+                    analysis,
+                    prompt_overlay=overlay,
+                )
+                if overlay
+                else outfit_advice_service.generate(analysis)
+            ),
             "response_message": "穿搭分析完成。",
         }
+        if overlay:
+            output["active_prompt"] = active_prompt(state, "outfit_analyze")
+        return output
 
     def outfit_revise_node(state):
         conversation_state = state.get("conversation_state")
@@ -161,7 +212,7 @@ def build_assistant_graph(
                 "response_message": "已解析改搭约束，尚未执行真实商品替换。",
             }
         outcome = outfit_revise_candidate_service.find_replacements(
-            state.get("message", ""),
+            remembered_message(state),
             conversation_state,
             parsed,
             state["retrieval_limit"],
@@ -178,19 +229,27 @@ def build_assistant_graph(
             )
         result = dict(parsed)
         result["replacement_candidates"] = replacement_candidates
+        overlay = None
         if outfit_revise_advice_service is not None:
-            result = outfit_revise_advice_service.generate(
-                result,
-                conversation_state,
+            overlay = prompt_overlay(state, "outfit_revise")
+            result = (
+                outfit_revise_advice_service.generate(
+                    result, conversation_state, prompt_overlay=overlay
+                )
+                if overlay
+                else outfit_revise_advice_service.generate(result, conversation_state)
             )
             response_message = "改搭建议生成完成。"
         else:
             response_message = outcome["message"]
-        return {
+        output = {
             "status": "ok",
             "result": result,
             "response_message": response_message,
         }
+        if overlay:
+            output["active_prompt"] = active_prompt(state, "outfit_revise")
+        return output
 
     builder = StateGraph(AssistantState)
     builder.add_node("classify_intent_node", classify_intent_node)

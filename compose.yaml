@@ -1,0 +1,159 @@
+name: shopping-qna-dev
+
+x-app-env: &app-env
+  DASHSCOPE_API_KEY: ${DASHSCOPE_API_KEY:?set DASHSCOPE_API_KEY}
+  DEV_JWT_SECRET: ${DEV_JWT_SECRET:?set DEV_JWT_SECRET}
+  DEV_JWT_ISSUER: shopping-qna-dev
+  DEV_JWT_AUDIENCE: shopping-qna-api
+  MINIO_ENDPOINT: minio:9000
+  MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY:?set MINIO_ACCESS_KEY}
+  MINIO_SECRET_KEY: ${MINIO_SECRET_KEY:?set MINIO_SECRET_KEY}
+  MINIO_SECURE: "false"
+  MINIO_BUCKET: shopping-qna
+  NEO4J_URI: bolt://neo4j:7687
+  NEO4J_USER: neo4j
+  NEO4J_PASSWORD: ${NEO4J_PASSWORD:?set NEO4J_PASSWORD}
+  OUTFIT_PROVIDER: neo4j
+  CHROMA_PERSIST_DIR: /data/chroma
+  PROCESSED_DATA_DIR: /data/processed
+  POLYVORE_SAMPLE_PATH: /data/processed/polyvore_items_sample.jsonl
+  POLYVORE_NEO4J_MANIFEST_PATH: /data/processed/polyvore_neo4j_items_manifest.jsonl
+  POLYVORE_RETRIEVAL_MANIFEST_PATH: /data/processed/polyvore_neo4j_items_retrieval.jsonl
+  POLYVORE_ENRICHED_PATH: /data/processed/polyvore_items_enriched_sample.jsonl
+  SEED_READY_FILE: /state/.seed-ready
+  HF_HOME: /models
+  ENABLE_MODEL_WARMUP: "false"
+  MEMORY_READ_ENABLED: ${MEMORY_READ_ENABLED:-true}
+  MEMORY_WRITE_ENABLED: ${MEMORY_WRITE_ENABLED:-true}
+  SEMANTIC_MEMORY_ENABLED: ${SEMANTIC_MEMORY_ENABLED:-true}
+  EPISODIC_MEMORY_ENABLED: ${EPISODIC_MEMORY_ENABLED:-true}
+  PROCEDURAL_MEMORY_ENABLED: ${PROCEDURAL_MEMORY_ENABLED:-true}
+
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    environment:
+      POSTGRES_DB: shopping_qna_dev
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d shopping_qna_dev"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  migrate:
+    build: .
+    command: python -m src.memory_migrate
+    environment:
+      MEMORY_DATABASE_URL: postgresql://postgres:${POSTGRES_PASSWORD}@postgres:5432/shopping_qna_dev
+      MEMORY_MIGRATOR_DB_PASSWORD: ${MEMORY_MIGRATOR_DB_PASSWORD:?set MEMORY_MIGRATOR_DB_PASSWORD}
+      MEMORY_API_DB_PASSWORD: ${MEMORY_API_DB_PASSWORD:?set MEMORY_API_DB_PASSWORD}
+      MEMORY_WORKER_DB_PASSWORD: ${MEMORY_WORKER_DB_PASSWORD:?set MEMORY_WORKER_DB_PASSWORD}
+      MEMORY_POLLER_DB_PASSWORD: ${MEMORY_POLLER_DB_PASSWORD:?set MEMORY_POLLER_DB_PASSWORD}
+      MEMORY_MAINTENANCE_DB_PASSWORD: ${MEMORY_MAINTENANCE_DB_PASSWORD:?set MEMORY_MAINTENANCE_DB_PASSWORD}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
+
+  minio:
+    image: quay.io/minio/minio:RELEASE.2025-07-23T15-54-02Z
+    command: server /data --console-address :9001
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ACCESS_KEY:?set MINIO_ACCESS_KEY}
+      MINIO_ROOT_PASSWORD: ${MINIO_SECRET_KEY:?set MINIO_SECRET_KEY}
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    volumes:
+      - minio-data:/data
+
+  minio-init:
+    image: quay.io/minio/mc:RELEASE.2025-07-21T05-28-08Z
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - >-
+        until mc alias set local http://minio:9000 "$${MINIO_ACCESS_KEY}" "$${MINIO_SECRET_KEY}"; do sleep 2; done;
+        mc mb --ignore-existing local/shopping-qna
+    environment:
+      MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY:?set MINIO_ACCESS_KEY}
+      MINIO_SECRET_KEY: ${MINIO_SECRET_KEY:?set MINIO_SECRET_KEY}
+    depends_on:
+      minio:
+        condition: service_started
+    restart: "no"
+
+  neo4j:
+    image: neo4j:5.26-community
+    environment:
+      NEO4J_AUTH: neo4j/${NEO4J_PASSWORD:?set NEO4J_PASSWORD}
+      NEO4J_PASSWORD: ${NEO4J_PASSWORD:?set NEO4J_PASSWORD}
+    ports:
+      - "7474:7474"
+      - "7687:7687"
+    volumes:
+      - neo4j-data:/data
+    healthcheck:
+      test: ["CMD-SHELL", "cypher-shell -u neo4j -p \"$$NEO4J_PASSWORD\" 'RETURN 1' || exit 1"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+
+  bootstrap:
+    build: .
+    command: python -m src.bootstrap
+    environment:
+      <<: *app-env
+    volumes:
+      - app-data:/data
+      - seed-state:/state
+      - model-cache:/models
+    depends_on:
+      minio-init:
+        condition: service_completed_successfully
+      neo4j:
+        condition: service_healthy
+    restart: "no"
+
+  api:
+    build: .
+    environment:
+      <<: *app-env
+      DATABASE_URL: postgresql://shopping_memory_api_login:${MEMORY_API_DB_PASSWORD}@postgres:5432/shopping_qna_dev
+    ports:
+      - "8000:8000"
+    volumes:
+      - app-data:/data
+      - seed-state:/state:ro
+      - model-cache:/models
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      bootstrap:
+        condition: service_completed_successfully
+    restart: unless-stopped
+
+  worker:
+    build: .
+    command: python -m src.memory_worker
+    environment:
+      <<: *app-env
+      MEMORY_WORKER_DATABASE_URL: postgresql://shopping_memory_worker_login:${MEMORY_WORKER_DB_PASSWORD}@postgres:5432/shopping_qna_dev
+      MEMORY_POLLER_DATABASE_URL: postgresql://shopping_memory_poller_login:${MEMORY_POLLER_DB_PASSWORD}@postgres:5432/shopping_qna_dev
+    volumes:
+      - model-cache:/models
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    restart: unless-stopped
+
+volumes:
+  postgres-data:
+  minio-data:
+  neo4j-data:
+  app-data:
+  seed-state:
+  model-cache:

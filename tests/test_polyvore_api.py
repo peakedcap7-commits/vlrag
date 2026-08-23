@@ -2,6 +2,8 @@ import ast
 import importlib
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
+from uuid import UUID
 
 
 def import_required(module_name):
@@ -142,15 +144,37 @@ def create_client(
     app_module = import_required("src.api.app")
     from fastapi.testclient import TestClient
 
-    return TestClient(
+    class Authenticator:
+        def authenticate(self, _request):
+            return SimpleNamespace(
+                tenant_id=UUID("11111111-1111-1111-1111-111111111111"),
+                user_id=UUID("22222222-2222-2222-2222-222222222222"),
+                roles=frozenset({"user"}),
+                is_admin=False,
+            )
+
+    client = TestClient(
         app_module.create_app(
             service,
             outfit_analyze_service=outfit_analyze_service,
             outfit_advice_service=outfit_advice_service,
             outfit_revise_service=outfit_revise_service,
             outfit_revise_candidate_service=outfit_revise_candidate_service,
+            authenticator=Authenticator(),
         )
     )
+    original_post = client.post
+
+    def post(url, **kwargs):
+        if url == "/assistant/message" and "json" in kwargs:
+            kwargs["json"] = dict(kwargs["json"])
+            kwargs["json"].setdefault(
+                "thread_id", "33333333-3333-3333-3333-333333333333"
+            )
+        return original_post(url, **kwargs)
+
+    client.post = post
+    return client
 
 
 class PolyvoreApiTest(unittest.TestCase):
@@ -335,6 +359,8 @@ class PolyvoreApiTest(unittest.TestCase):
 
         analyze = schemas.AssistantMessageResponse.model_validate(
             {
+                "thread_id": "33333333-3333-3333-3333-333333333333",
+                "run_id": "44444444-4444-4444-4444-444444444444",
                 "intent": "outfit_analyze",
                 "status": "ok",
                 "result": {
@@ -349,6 +375,8 @@ class PolyvoreApiTest(unittest.TestCase):
         )
         revise = schemas.AssistantMessageResponse.model_validate(
             {
+                "thread_id": "33333333-3333-3333-3333-333333333333",
+                "run_id": "55555555-5555-5555-5555-555555555555",
                 "intent": "outfit_revise",
                 "status": "ok",
                 "result": {

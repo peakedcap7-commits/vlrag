@@ -2,6 +2,28 @@
 
 ShoppingQnA 是一个面向潮流穿搭场景的 AI 应用后端。它把商品图像、中文语义检索、Neo4j outfit 关系和大模型建议生成串起来，用来支持“单品推荐”“多件单品搭配判断”和“对话式改搭”。
 
+## Docker 一键开发部署
+
+复制 `.env.example` 为 `.env`，替换其中所有 `<...>` 值，然后运行：
+
+```bash
+docker compose up --build
+```
+
+Compose 会幂等启动 PostgreSQL/pgvector、Neo4j、MinIO、API、LangMem worker，并导入三件项目自有的合成演示商品。首次启动需要下载 Chinese-CLIP 模型并建立向量索引，因此会明显慢于后续启动。`GET /health` 只表示进程存活；`GET /health/ready` 中的 `data_status=ready` 才表示演示索引可用。
+
+业务接口均要求本地开发 JWT。容器启动后在项目目录生成一个 token：
+
+```bash
+docker compose run --rm api shopping-dev-token \
+  --tenant-id 11111111-1111-1111-1111-111111111111 \
+  --user-id 22222222-2222-2222-2222-222222222222
+```
+
+管理员 token 额外传 `--role tenant_admin`。身份、租户和角色只从签名后的 token 读取；项目不提供登录或发 token 的 HTTP 接口。此认证层仅供开发部署，生产环境必须换成正式 OIDC/JWT 验证。
+
+记忆能力包括：thread 级短期状态、用户级语义偏好、正向反馈驱动的情景案例、需要管理员审批/激活的租户级程序提示。可用 `MEMORY_READ_ENABLED`、`MEMORY_WRITE_ENABLED` 及三类记忆开关做功能回滚；不要用 `docker compose down -v` 作为普通回滚命令。
+
 当前版本重点是后端闭环：数据、向量库、图数据库、FastAPI 接口和 LangGraph 编排都已接入；正式前端仍未开始。
 
 ## 当前能力
@@ -184,7 +206,7 @@ http://127.0.0.1:8000/docs
 建议先手动预热：
 
 ```powershell
-curl -X POST http://127.0.0.1:8000/warmup
+curl -X POST http://127.0.0.1:8000/warmup -H "Authorization: Bearer <tenant-admin-jwt>"
 ```
 
 查看就绪状态：
@@ -199,6 +221,7 @@ curl http://127.0.0.1:8000/health/ready
 
 ```powershell
 curl -X POST http://127.0.0.1:8000/polyvore/recommend `
+  -H "Authorization: Bearer <local-jwt>" `
   -H "Content-Type: application/json" `
   -d '{"query":"蓝色裤子","top_k":3,"retrieval_limit":3}'
 ```
@@ -212,8 +235,10 @@ curl -X POST http://127.0.0.1:8000/polyvore/recommend `
 
 ```powershell
 curl -X POST http://127.0.0.1:8000/assistant/message `
+  -H "Authorization: Bearer <local-jwt>" `
   -H "Content-Type: application/json" `
   -d '{
+    "thread_id":"33333333-3333-3333-3333-333333333333",
     "message":"看看这三件单品搭不搭，给我穿搭建议",
     "image_keys":[
       "polyvore/items/199614803.jpg",
@@ -246,8 +271,10 @@ MinIO 读图 → Chinese-CLIP 临时编码 → 图片 Chroma Top-3
 
 ```powershell
 curl -X POST http://127.0.0.1:8000/assistant/message `
+  -H "Authorization: Bearer <local-jwt>" `
   -H "Content-Type: application/json" `
   -d '{
+    "thread_id":"33333333-3333-3333-3333-333333333333",
     "message":"不要裙子，换成裤子，整体更正式一点",
     "conversation_state":{
       "anchor_item_id":"199614803",

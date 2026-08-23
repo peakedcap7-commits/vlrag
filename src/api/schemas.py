@@ -1,4 +1,5 @@
 from typing import Literal
+from uuid import UUID
 
 from pydantic import (
     BaseModel,
@@ -75,6 +76,8 @@ class ReadyResponse(StrictModel):
     status: Literal["not_ready", "warming", "ready", "error"]
     warmup_seconds: float | None
     error: str | None
+    data_status: Literal["ready", "data_not_ready"]
+    postgres_ready: bool
 
 
 AssistantIntent = Literal[
@@ -198,6 +201,7 @@ class OutfitReviseAdviceResult(StrictModel):
 
 
 class AssistantMessageRequest(StrictModel):
+    thread_id: UUID
     message: str = ""
     image_keys: list[str] = Field(default_factory=list, max_length=4)
     conversation_state: ConversationState | None = None
@@ -217,6 +221,8 @@ class AssistantMessageRequest(StrictModel):
 
 
 class AssistantMessageResponse(StrictModel):
+    thread_id: UUID
+    run_id: UUID
     intent: AssistantIntent
     status: Literal["ok", "not_ready", "unsupported"]
     result: (
@@ -227,3 +233,56 @@ class AssistantMessageResponse(StrictModel):
         | None
     )
     message: str
+
+
+class FeedbackRequest(StrictModel):
+    thread_id: UUID
+    run_id: UUID
+    event: Literal[
+        "accepted", "saved", "purchased", "thumbs_up", "thumbs_down", "rating"
+    ]
+    rating: int | None = Field(default=None, ge=1, le=5)
+    comment: str | None = Field(default=None, max_length=1000)
+    idempotency_key: str = Field(min_length=1, max_length=128)
+
+    @model_validator(mode="after")
+    def rating_event_requires_rating(self):
+        if self.event == "rating" and self.rating is None:
+            raise ValueError("rating 事件必须提供 rating")
+        return self
+
+
+class FeedbackResponse(StrictModel):
+    feedback_id: UUID
+    accepted: bool = True
+
+
+class MemoryListResponse(StrictModel):
+    type: Literal["semantic", "episodic"]
+    items: list[dict]
+
+
+class PromptActionResponse(StrictModel):
+    status: str
+    job_id: UUID | None = None
+    generation: int | None = None
+
+
+class PromptOptimizeRequest(StrictModel):
+    run_ids: list[UUID] = Field(min_length=1, max_length=20)
+
+    @field_validator("run_ids")
+    @classmethod
+    def run_ids_must_be_unique(cls, value):
+        if len(value) != len(set(value)):
+            raise ValueError("run_ids 不能重复")
+        return value
+
+
+class PromptActivateRequest(StrictModel):
+    expected_generation: int = Field(ge=0)
+
+
+class PromptRollbackRequest(StrictModel):
+    version_id: UUID
+    expected_generation: int = Field(ge=1)

@@ -173,13 +173,15 @@ class OutfitReviseAdviceService:
     def __init__(self, llm):
         self.llm = llm
 
-    def generate(self, revise_result, conversation_state):
+    def generate(self, revise_result, conversation_state, prompt_overlay=None):
         facts = json.dumps(
             _public_facts(revise_result, conversation_state),
             ensure_ascii=False,
         )
+        overlay = f"\n租户已审核的表达规则：{prompt_overlay}" if prompt_overlay else ""
         prompt = f"""
 你是穿搭改搭建议助手。请严格依据下列已确定事实生成简洁中文建议。
+{overlay}
 候选顺序已经由系统确定，你不得重新选择、删除、增加或调整候选顺序。
 不得编造品牌、价格、材质、图片属性或图数据库证据。
 不得输出商品 ID、对象键、穿搭关系标识或技术评分字段；

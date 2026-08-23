@@ -1,6 +1,7 @@
-import unittest
 import importlib
 import os
+import unittest
+from types import SimpleNamespace
 from unittest.mock import patch
 
 
@@ -10,6 +11,11 @@ class FakeService:
 
     def close(self):
         self.closed = True
+
+
+class AdminAuthenticator:
+    def authenticate(self, _request):
+        return SimpleNamespace(is_admin=True)
 
 
 class ApiWarmupTest(unittest.TestCase):
@@ -28,6 +34,7 @@ class ApiWarmupTest(unittest.TestCase):
 
     def _build_client(self, enable_model_warmup):
         from fastapi.testclient import TestClient
+
         from src.api.app import create_app
         from src.api.runtime import ApiRuntimeManager, RuntimeResources
 
@@ -45,6 +52,7 @@ class ApiWarmupTest(unittest.TestCase):
             create_app(
                 runtime_manager=runtime,
                 enable_model_warmup=enable_model_warmup,
+                authenticator=AdminAuthenticator(),
             )
         )
         return client, runtime, calls
@@ -88,6 +96,7 @@ class ApiWarmupTest(unittest.TestCase):
 
     def test_预热错误只返回异常类型不泄露原始消息(self):
         from fastapi.testclient import TestClient
+
         from src.api.app import create_app
         from src.api.runtime import ApiRuntimeManager
 
@@ -98,6 +107,7 @@ class ApiWarmupTest(unittest.TestCase):
             create_app(
                 runtime_manager=ApiRuntimeManager(builder),
                 enable_model_warmup=False,
+                authenticator=AdminAuthenticator(),
             )
         )
 
