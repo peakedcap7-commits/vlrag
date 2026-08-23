@@ -442,6 +442,9 @@ def test_prompt_management_uses_controlled_database_functions():
     assert "memory.complete_memory_job" in worker
     assert "UPDATE memory.memory_jobs" not in worker
     assert "FROM memory.procedural_prompt_active" not in worker
+    assert "ON CONFLICT (tenant_id,user_id,dimension,lower(value),polarity)" in worker
+    assert "DO UPDATE SET context=EXCLUDED.context" in worker
+    assert "ON CONFLICT (tenant_id,prompt_key,content_hash) DO NOTHING" in worker
     for flag in (
         "read_enabled=MEMORY_READ_ENABLED",
         "write_enabled=MEMORY_WRITE_ENABLED",
@@ -453,14 +456,76 @@ def test_prompt_management_uses_controlled_database_functions():
 
 
 def test_episode_worker_creates_private_and_pending_shared_candidates():
-    from src.memory_worker import _redact
+    from src.auth import Identity
+    from src.memory_worker import EpisodeMemory, MemoryWorker, _redact
 
-    source = (Path(__file__).parents[1] / "src/memory_worker.py").read_text(encoding="utf-8")
-    assert "'user',%s,%s,%s,%s,%s,%s::vector,'active'" in source
-    assert "NULL,'tenant',%s,%s,%s,%s,%s,%s::vector,'pending'" in source
-    assert "Identity(identity.tenant_id, None" in source
-    assert "f.feedback_id=%s" in source
-    assert "f.rating>=4" in source
+    evidence = {
+        "request_summary": {"message": "test"},
+        "response_summary": {"message": "ok"},
+        "feedback_id": uuid4(),
+        "event": "accepted",
+        "rating": None,
+        "comment": None,
+    }
+
+    class Cursor:
+        def __init__(self, memory, row=None):
+            self.memory = memory
+            self.row = row
+
+        def execute(self, sql, params):
+            self.memory.calls.append((sql, params))
+
+        def fetchone(self):
+            return self.row
+
+    class Memory:
+        def __init__(self):
+            self.calls = []
+            self.identities = []
+            self.embeddings = type(
+                "E",
+                (),
+                {"embed_documents": lambda _self, texts: [[0.0] * 1024 for _ in texts]},
+            )()
+
+        @contextmanager
+        def transaction(self, identity, *_args):
+            self.identities.append(identity)
+            yield Cursor(self, evidence if len(self.identities) == 1 else None)
+
+    memory = Memory()
+    worker = object.__new__(MemoryWorker)
+    worker.memory = memory
+    worker.worker_id = uuid4()
+    worker.episode_manager = type(
+        "M",
+        (),
+        {
+            "invoke": lambda _self, _payload: [
+                EpisodeMemory(observation="o1", action="a1", result="r1"),
+                EpisodeMemory(observation="o2", action="a2", result="r2"),
+            ]
+        },
+    )()
+    identity = Identity(TENANT_A, USER, frozenset())
+    job = {
+        "job_id": uuid4(),
+        "source_run_id": uuid4(),
+        "payload": {"feedback_id": str(evidence["feedback_id"])},
+    }
+    worker._episodic(identity, job)
+
+    inserts = memory.calls[1:]
+    assert len(inserts) == 4
+    assert [params[-2] for _sql, params in inserts] == [0, 1, 0, 1]
+    assert all(params[-3] == job["job_id"] for _sql, params in inserts)
+    assert all("source_job_id,source_item_index" in sql for sql, _params in inserts)
+    assert all("ON CONFLICT (tenant_id,source_job_id,scope,source_item_index)" in sql for sql, _params in inserts)
+    assert all("WHERE source_job_id IS NOT NULL DO NOTHING" in sql for sql, _params in inserts)
+    assert "'active'" in inserts[0][0]
+    assert "'pending'" in inserts[-1][0]
+    assert memory.identities[-1].user_id is None
     assert "13800138000" not in _redact("电话 13800138000，邮箱 a@example.com")
     assert "a@example.com" not in _redact("电话 13800138000，邮箱 a@example.com")
 

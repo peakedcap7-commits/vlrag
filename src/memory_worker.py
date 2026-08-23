@@ -227,23 +227,27 @@ class MemoryWorker:
             return
         vectors = self.memory.embeddings.embed_documents([f"{item.observation} {item.action} {item.result}" for item in episodes])
         with self.memory.transaction(identity, "worker", self.worker_id) as cursor:
-            for item, embedding in zip(episodes, vectors):
+            for item_index, (item, embedding) in enumerate(zip(episodes, vectors)):
                 cursor.execute(
                     "INSERT INTO memory.episodic_memories "
                     "(tenant_id,memory_id,owner_user_id,scope,observation,action,result,source_run_id,"
-                    "source_feedback_id,embedding,status,expires_at) "
-                    "VALUES (%s,%s,%s,'user',%s,%s,%s,%s,%s,%s::vector,'active',now()+interval '180 days')",
-                    (identity.tenant_id, uuid4(), identity.user_id, item.observation, item.action, item.result, job["source_run_id"], row["feedback_id"], _vector(embedding)),
+                    "source_feedback_id,source_job_id,source_item_index,embedding,status,expires_at) "
+                    "VALUES (%s,%s,%s,'user',%s,%s,%s,%s,%s,%s,%s,%s::vector,'active',now()+interval '180 days') "
+                    "ON CONFLICT (tenant_id,source_job_id,scope,source_item_index) "
+                    "WHERE source_job_id IS NOT NULL DO NOTHING",
+                    (identity.tenant_id, uuid4(), identity.user_id, item.observation, item.action, item.result, job["source_run_id"], row["feedback_id"], job["job_id"], item_index, _vector(embedding)),
                 )
         tenant_identity = Identity(identity.tenant_id, None, frozenset())
         with self.memory.transaction(tenant_identity, "worker", self.worker_id) as cursor:
-            for item, embedding in zip(episodes, vectors):
+            for item_index, (item, embedding) in enumerate(zip(episodes, vectors)):
                 cursor.execute(
                     "INSERT INTO memory.episodic_memories "
                     "(tenant_id,memory_id,owner_user_id,scope,observation,action,result,source_run_id,"
-                    "source_feedback_id,embedding,status,expires_at) "
-                    "VALUES (%s,%s,NULL,'tenant',%s,%s,%s,%s,%s,%s::vector,'pending',now()+interval '180 days')",
-                    (identity.tenant_id, uuid4(), item.observation, item.action, item.result, job["source_run_id"], row["feedback_id"], _vector(embedding)),
+                    "source_feedback_id,source_job_id,source_item_index,embedding,status,expires_at) "
+                    "VALUES (%s,%s,NULL,'tenant',%s,%s,%s,%s,%s,%s,%s,%s::vector,'pending',now()+interval '180 days') "
+                    "ON CONFLICT (tenant_id,source_job_id,scope,source_item_index) "
+                    "WHERE source_job_id IS NOT NULL DO NOTHING",
+                    (identity.tenant_id, uuid4(), item.observation, item.action, item.result, job["source_run_id"], row["feedback_id"], job["job_id"], item_index, _vector(embedding)),
                 )
 
     def _procedural(self, identity, job):
