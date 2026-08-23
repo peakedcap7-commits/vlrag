@@ -544,7 +544,27 @@ def test_compose_builds_one_shared_application_image():
     assert compose.count("build: .") == 1
 
 
+def test_neo4j_container_only_receives_supported_auth_setting():
+    compose = (Path(__file__).parents[1] / "compose.yaml").read_text(encoding="utf-8")
+    assert "      NEO4J_PASSWORD:" not in compose
+    assert "$${NEO4J_AUTH#*/}" in compose
+
+
 def test_docker_installs_cpu_only_torch():
     dockerfile = (Path(__file__).parents[1] / "Dockerfile").read_text(encoding="utf-8")
-    assert "torch==2.6.0+cpu" in dockerfile
-    assert "https://download.pytorch.org/whl/cpu" in dockerfile
+    assert "ARG TARGETARCH" in dockerfile
+    assert 'test "$TARGETARCH" = "amd64"' in dockerfile
+    assert "ca-certificates curl libgomp1" in dockerfile
+    assert "torch-2.6.0%2Bcpu-cp312-cp312-linux_x86_64.whl" in dockerfile
+    for option in (
+        "--fail",
+        "--location",
+        "--retry 5",
+        "--retry-all-errors",
+        "--connect-timeout 15",
+    ):
+        assert option in dockerfile
+    wheel_path = "/tmp/torch-2.6.0+cpu-cp312-cp312-linux_x86_64.whl"
+    assert f'pip install "{wheel_path}"' in dockerfile
+    assert f'rm -f "{wheel_path}"' in dockerfile
+    assert "--index-url https://download.pytorch.org/whl/cpu" not in dockerfile
