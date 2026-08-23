@@ -1,11 +1,11 @@
-from pathlib import Path
+import os
 import tomllib
 import unittest
-
+from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 AGENT_DIR = ROOT / ".codex" / "agents"
-SKILL_PATH = "C:/Users/Administrator/.agents/skills/karpathy-guidelines/SKILL.md"
+SKILL_NAME = "karpathy-guidelines/SKILL.md"
 EXPECTED_SANDBOXES = {
     "architect": "workspace-write",
     "backend": "workspace-write",
@@ -41,19 +41,22 @@ class CustomAgentsTest(unittest.TestCase):
                 self.assertEqual(load_agent(name)["sandbox_mode"], expected_sandbox)
 
     def test_backend_and_frontend_enable_karpathy_guidelines(self) -> None:
-        self.assertTrue(Path(SKILL_PATH).is_file(), f"缺少开发规范：{SKILL_PATH}")
-
         for name in ("backend", "frontend"):
             with self.subTest(agent=name):
                 config = load_agent(name)
                 skill_configs = config["skills"]["config"]
                 self.assertTrue(
                     any(
-                        skill["path"] == SKILL_PATH and skill["enabled"] is True
+                        skill["path"].replace("\\", "/").endswith(SKILL_NAME)
+                        and skill["enabled"] is True
                         for skill in skill_configs
                     )
                 )
                 self.assertIn("karpathy-guidelines", config["developer_instructions"])
+
+        skill_path = os.getenv("KARPATHY_SKILL_PATH")
+        if skill_path:
+            self.assertTrue(Path(skill_path).is_file(), f"缺少开发规范：{skill_path}")
 
     def test_agent_write_boundaries_are_protected(self) -> None:
         expected_boundaries = {

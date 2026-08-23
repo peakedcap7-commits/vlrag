@@ -1,5 +1,10 @@
 import json
 import unittest
+from uuid import UUID
+
+JWT_SECRET = "0123456789abcdef0123456789abcdef"
+TENANT_ID = UUID("11111111-1111-1111-1111-111111111111")
+USER_ID = UUID("22222222-2222-2222-2222-222222222222")
 
 
 class FakeResponse:
@@ -69,11 +74,18 @@ class PerformanceObservabilityTest(unittest.TestCase):
         from fastapi.testclient import TestClient
 
         from src.api.app import create_app
+        from src.auth import LocalJWTAuthenticator
 
+        auth = LocalJWTAuthenticator(JWT_SECRET)
         with self.assertLogs("shopping_qna.performance", level="INFO") as logs:
-            with TestClient(create_app(service=FakeService())) as client:
+            with TestClient(
+                create_app(service=FakeService(), authenticator=auth)
+            ) as client:
                 response = client.post(
                     "/polyvore/recommend",
+                    headers={
+                        "Authorization": f"Bearer {auth.issue(TENANT_ID, USER_ID)}"
+                    },
                     json={
                         "query": "测试",
                         "top_k": 3,

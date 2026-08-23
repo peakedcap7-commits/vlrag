@@ -7,6 +7,20 @@ from types import SimpleNamespace
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
 
+def fake_client():
+    class FakeEmbeddings:
+        def create(self, model, input):
+            assert model == "text-embedding-v3"
+            return SimpleNamespace(
+                data=[
+                    SimpleNamespace(index=index, embedding=[float(index)] * 1024)
+                    for index, _text in enumerate(input)
+                ]
+            )
+
+    return SimpleNamespace(embeddings=FakeEmbeddings())
+
+
 class TestDashScopeEmbeddings:
     """百炼 text-embedding-v3 测试"""
 
@@ -38,7 +52,7 @@ class TestDashScopeEmbeddings:
         """验证输出维度为 1024"""
         from src.embeddings.dashscope_emb import DashScopeEmbeddings
 
-        emb = DashScopeEmbeddings()
+        emb = DashScopeEmbeddings(client=fake_client())
         vector = emb.embed_query("黑色真皮机车夹克")
         assert len(vector) == 1024
 
@@ -46,7 +60,7 @@ class TestDashScopeEmbeddings:
         """验证批量嵌入"""
         from src.embeddings.dashscope_emb import DashScopeEmbeddings
 
-        emb = DashScopeEmbeddings()
+        emb = DashScopeEmbeddings(client=fake_client())
         texts = ["红色连衣裙", "蓝色牛仔裤", "白色运动鞋"]
         vectors = emb.embed_documents(texts)
         assert len(vectors) == 3

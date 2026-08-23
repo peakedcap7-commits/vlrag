@@ -47,7 +47,7 @@ class PolyvoreRecommendServiceTest(unittest.TestCase):
 
         self.assertEqual(
             config.valid_path,
-            Path(r"D:\datasets\polyvore-outfits\nondisjoint\valid.json"),
+            Path("data/processed/valid.json"),
         )
         self.assertEqual(
             config.neo4j_manifest_path,

@@ -294,3 +294,9 @@ def test_compose_declares_required_services_and_no_redis_or_celery():
         assert service in compose
     assert "redis:" not in compose
     assert "celery" not in compose.lower()
+
+
+def test_docker_installs_cpu_only_torch():
+    dockerfile = (Path(__file__).parents[1] / "Dockerfile").read_text(encoding="utf-8")
+    assert "torch==2.6.0+cpu" in dockerfile
+    assert "https://download.pytorch.org/whl/cpu" in dockerfile

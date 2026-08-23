@@ -1,5 +1,17 @@
 import json
 import unittest
+from uuid import UUID, uuid4
+
+JWT_SECRET = "0123456789abcdef0123456789abcdef"
+TENANT_ID = UUID("11111111-1111-1111-1111-111111111111")
+USER_ID = UUID("22222222-2222-2222-2222-222222222222")
+
+
+def local_auth():
+    from src.auth import LocalJWTAuthenticator
+
+    auth = LocalJWTAuthenticator(JWT_SECRET)
+    return auth, {"Authorization": f"Bearer {auth.issue(TENANT_ID, USER_ID)}"}
 
 
 class FakeRecommendService:
@@ -142,6 +154,7 @@ class OutfitReviseAdviceIntegrationTest(unittest.TestCase):
             OutfitReviseAdviceService,
         )
 
+        auth, headers = local_auth()
         app = create_app(
             service=FakeRecommendService(),
             outfit_revise_service=FakeReviseService(),
@@ -150,11 +163,14 @@ class OutfitReviseAdviceIntegrationTest(unittest.TestCase):
             outfit_revise_advice_service=OutfitReviseAdviceService(
                 FailingLlm()
             ),
+            authenticator=auth,
         )
         with TestClient(app) as client:
             response = client.post(
                 "/assistant/message",
+                headers=headers,
                 json={
+                    "thread_id": str(uuid4()),
                     "message": "换成裤子",
                     "conversation_state": {
                         "anchor_item_id": "top",
@@ -179,6 +195,7 @@ class OutfitReviseAdviceIntegrationTest(unittest.TestCase):
             OutfitReviseAdviceService,
         )
 
+        auth, headers = local_auth()
         app = create_app(
             service=FakeRecommendService(),
             outfit_revise_service=FakeReviseService(),
@@ -187,11 +204,14 @@ class OutfitReviseAdviceIntegrationTest(unittest.TestCase):
             outfit_revise_advice_service=OutfitReviseAdviceService(
                 IdLeakingLlm()
             ),
+            authenticator=auth,
         )
         with TestClient(app) as client:
             response = client.post(
                 "/assistant/message",
+                headers=headers,
                 json={
+                    "thread_id": str(uuid4()),
                     "message": "不要裙子，换成裤子，整体更正式一点",
                     "conversation_state": {
                         "anchor_item_id": "199614803",
