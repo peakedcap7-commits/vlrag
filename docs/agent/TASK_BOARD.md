@@ -7,18 +7,22 @@
 
 ## 当前任务
 
-- 任务：M3-B 改搭替换候选召回与 metadata 过滤。
-- 当前阶段：已完成文本 Chroma 召回、resolver 补齐、约束过滤和契约测试。
+- 任务：多租户四类记忆、开发 JWT 与 Docker 一键部署。
+- 当前阶段：架构方案和数据库技术评审已完成，进入实现阶段。
 
 ## Agent 状态
 
 | Agent | 状态 | 当前任务 | 分支或 Worktree | 是否阻塞 |
 |---|---|---|---|---|
-| 主 Agent | 已完成 | 完成 M3-B 候选召回与过滤 | main / D:\pj\vlrag\shopping-qna | 否 |
+| 主 Agent | 进行中 | 集成记忆、JWT、数据库迁移与 Docker | main / 当前工作区 | 否 |
+| architect | 已完成 | 记忆、JWT 与 Docker 设计 | 主工作区（仅设计文档） | 否 |
+| database | 待开始 | migration、RLS 与数据库函数 | 独立 Worktree | 否 |
+| backend | 待开始 | JWT、记忆服务、worker、API 与 Docker | 独立 Worktree | 否 |
 
 ## 文件所有权
 
-当前没有专业 Agent 持有文件写入权。
+- database 仅持有 migration/数据库测试文件。
+- backend 仅持有生产 Python、Docker、环境示例和对应非数据库测试文件。
 
 ## 收尾状态
 
