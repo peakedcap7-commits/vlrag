@@ -233,6 +233,16 @@ class AssistantMessageResponse(StrictModel):
         | None
     )
     message: str
+    conversation_state: ConversationState | None = None
+    display_items: list[ReplacementCandidate] = Field(default_factory=list)
+
+
+class AssetURLsRequest(StrictModel):
+    keys: list[str] = Field(min_length=1, max_length=20)
+
+
+class MemoryDecisionRequest(StrictModel):
+    action: Literal["confirm", "reject", "undo"]
 
 
 class FeedbackRequest(StrictModel):

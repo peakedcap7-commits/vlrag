@@ -1,15 +1,19 @@
 from contextlib import asynccontextmanager
 from uuid import UUID
 
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, File, Form, HTTPException, Query, Request, UploadFile
+from fastapi.responses import StreamingResponse
 
 from src.api.runtime import ApiRuntimeManager, RuntimeResources
 from src.api.schemas import (
+    AssetURLsRequest,
     AssistantMessageRequest,
     AssistantMessageResponse,
+    ConversationState,
     FeedbackRequest,
     FeedbackResponse,
     HealthResponse,
+    MemoryDecisionRequest,
     MemoryListResponse,
     PromptActionResponse,
     PromptActivateRequest,
@@ -51,6 +55,7 @@ def create_app(
     enable_model_warmup=None,
     authenticator=None,
     memory_service=None,
+    asset_service=None,
 ):
     """创建仅负责 HTTP 边界的 FastAPI 应用。"""
     if runtime_manager is not None and service is not None:
@@ -157,6 +162,16 @@ def create_app(
     app.state.runtime_manager = runtime_manager
     app.state.authenticator = authenticator
     app.state.memory_service = memory_service
+    app.state.asset_service = asset_service
+
+    def assets(request):
+        if request.app.state.asset_service is None:
+            from src.assets import configured_asset_service
+            try:
+                request.app.state.asset_service = configured_asset_service()
+            except ValueError as exc:
+                raise HTTPException(503, "图片服务未配置") from exc
+        return request.app.state.asset_service
 
     def identity(request):
         auth = request.app.state.authenticator
@@ -187,13 +202,40 @@ def create_app(
         with measure(
             "total_ms",
             method=request.method,
-            path=request.url.path,
+            path="/assets/content/[token]" if request.url.path.startswith("/assets/content/") else request.url.path,
         ):
             return await call_next(request)
 
     @app.get("/health", response_model=HealthResponse)
     def health():
         return {"status": "ok"}
+
+    @app.get("/auth/me")
+    def auth_me(request: Request):
+        current = identity(request)
+        return {"tenant_id": current.tenant_id, "user_id": current.user_id, "roles": sorted(current.roles)}
+
+    @app.post("/assets/images")
+    def upload_image(request: Request, thread_id: UUID = Form(...), file: UploadFile = File(...)):
+        current = identity(request)
+        from src.assets import MAX_BYTES
+        try:
+            return assets(request).upload(current, thread_id, file.file.read(MAX_BYTES + 1))
+        finally:
+            file.file.close()
+
+    @app.post("/assets/urls")
+    def asset_urls(payload: AssetURLsRequest, request: Request):
+        current = identity(request)
+        return {"items": [assets(request).url(current, key) for key in payload.keys]}
+
+    @app.get("/assets/content/{token}")
+    def asset_content(token: str, request: Request):
+        current = identity(request)
+        chunks, stat = assets(request).content(current, token)
+        media_type = stat.content_type if stat.content_type in {"image/jpeg", "image/png", "image/webp"} else "application/octet-stream"
+        return StreamingResponse(chunks, media_type=media_type,
+                                 headers={"Cache-Control": "no-store", "X-Content-Type-Options": "nosniff"})
 
     @app.get("/health/ready", response_model=ReadyResponse)
     def ready(request: Request):
@@ -223,14 +265,23 @@ def create_app(
     @app.post("/assistant/message", response_model=AssistantMessageResponse)
     def assistant_message(payload: AssistantMessageRequest, request: Request):
         current = identity(request)
-        resources = request.app.state.runtime_manager.get_resources()
         memory = request.app.state.memory_service
         graph_payload = payload.model_dump(mode="json", exclude_none=True)
         thread_id = graph_payload.pop("thread_id")
+        for key in payload.image_keys:
+            assets(request).authorize(current, key, thread_id)
+        stored = memory.load_thread(current, thread_id)
         if "conversation_state" not in graph_payload:
-            stored = memory.load_thread(current, thread_id)
             if stored is not None:
                 graph_payload["conversation_state"] = stored
+        forget = getattr(memory, "forget_from_message", lambda *_: None)(current, payload.message)
+        if forget is not None:
+            state = {"intent": "unsupported", "status": "ok", "result": None,
+                     "response_message": forget, "conversation_state": graph_payload.get("conversation_state")}
+            run_id = memory.record_run(current, thread_id, graph_payload, state)
+            return {"thread_id": thread_id, "run_id": run_id, "intent": state["intent"], "status": "ok",
+                    "result": None, "message": forget, "conversation_state": state["conversation_state"]}
+        resources = request.app.state.runtime_manager.get_resources()
         context = memory.load_context(
             current,
             graph_payload.get("message", ""),
@@ -242,6 +293,10 @@ def create_app(
         }
         graph_payload["procedural_prompts"] = context["procedural"]
         state = resources.assistant_graph.invoke(graph_payload)
+        if state["status"] != "ok":
+            state["conversation_state"] = stored
+        if state.get("conversation_state") is not None:
+            state["conversation_state"] = ConversationState.model_validate(state["conversation_state"]).model_dump(mode="json")
         run_id = memory.record_run(current, thread_id, graph_payload, state)
         return {
             "thread_id": thread_id,
@@ -250,7 +305,39 @@ def create_app(
             "status": state["status"],
             "result": state.get("result"),
             "message": state["response_message"],
+            "conversation_state": state.get("conversation_state"),
+            "display_items": state.get("display_items", []),
         }
+
+    @app.get("/assistant/memory-events")
+    def memory_events(request: Request, after: str | None = None, limit: int = Query(20, ge=1, le=100)):
+        current = identity(request)
+        return memories(request).list_memory_events(current, after=after, limit=limit)
+
+    @app.post("/assistant/memory-events/{event_id}/decision")
+    def memory_decision(event_id: UUID, payload: MemoryDecisionRequest, request: Request):
+        current = identity(request)
+        return memories(request).decide_memory_event(current, event_id, payload.action)
+
+    @app.get("/admin/episodes")
+    def admin_episodes(request: Request, status: str = "pending", cursor: str | None = None,
+                       limit: int = Query(20, ge=1, le=100)):
+        current = identity(request)
+        if not current.is_admin:
+            raise HTTPException(403, "需要 tenant_admin 角色")
+        if status not in {"pending", "active"}:
+            raise HTTPException(422, "status 无效")
+        return memories(request).list_admin_episodes(current, status=status, cursor=cursor, limit=limit)
+
+    @app.get("/admin/runs")
+    def admin_runs(request: Request, feedback: str = "positive", cursor: str | None = None,
+                   limit: int = Query(20, ge=1, le=100)):
+        current = identity(request)
+        if not current.is_admin:
+            raise HTTPException(403, "需要 tenant_admin 角色")
+        if feedback != "positive":
+            raise HTTPException(422, "feedback 只能是 positive")
+        return memories(request).list_admin_runs(current, feedback=feedback, cursor=cursor, limit=limit)
 
     @app.post("/assistant/feedback", response_model=FeedbackResponse)
     def feedback(payload: FeedbackRequest, request: Request):

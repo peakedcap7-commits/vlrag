@@ -161,6 +161,7 @@ def create_client(
             outfit_revise_service=outfit_revise_service,
             outfit_revise_candidate_service=outfit_revise_candidate_service,
             authenticator=Authenticator(),
+            asset_service=SimpleNamespace(authorize=lambda *_: None),
         )
     )
     original_post = client.post

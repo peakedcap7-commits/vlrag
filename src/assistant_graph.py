@@ -29,6 +29,7 @@ class AssistantState(TypedDict, total=False):
     memory_context: dict[str, Any]
     procedural_prompts: dict[str, Any]
     active_prompt: dict[str, Any]
+    display_items: list[dict[str, Any]]
 
 
 REVISION_KEYWORDS = (
@@ -98,6 +99,26 @@ def unsupported_node(_state):
     }
 
 
+def _display_item(item):
+    """只从检索器已解析的商品事实构造画布，不使用模型输出的标识。"""
+    return {"item_id": str(item["item_id"]), "object_key": item.get("object_key", ""),
+            "category": item.get("category", ""), "sub_category": item.get("sub_category", ""),
+            "colors": item.get("colors", []), "style": item.get("style", [])}
+
+
+def _public_state(items, intent, previous=None, candidates=None):
+    previous = previous or {}
+    ids = list(dict.fromkeys(item["item_id"] for item in items))
+    return {"anchor_item_id": ids[0] if ids else None, "selected_item_ids": ids,
+            "candidate_item_ids": list(dict.fromkeys(candidates or ids)),
+            "locked_item_ids": [i for i in previous.get("locked_item_ids", []) if i in ids],
+            "excluded_item_ids": previous.get("excluded_item_ids", []),
+            "item_metadata": [{k: v for k, v in item.items() if k != "object_key"}
+                              for index, item in enumerate(items)
+                              if item["item_id"] not in [other["item_id"] for other in items[:index]]],
+            "last_intent": intent}
+
+
 def build_assistant_graph(
     service,
     outfit_analyze_service=None,
@@ -158,6 +179,13 @@ def build_assistant_graph(
             "result": result,
             "response_message": "推荐完成。",
         }
+        if isinstance(result, dict):
+            anchor = result.get("anchor")
+            items = ([_display_item(anchor["resolved"])] if anchor and anchor.get("resolved") else [])
+            items += [_display_item(candidate["resolved"]) for candidate in result.get("outfit_candidates", [])
+                      if candidate.get("resolved", {}).get("found")]
+            items = list({item["item_id"]: item for item in items}.values())[:4]
+            output.update(display_items=items, conversation_state=_public_state(items, "single_item_recommend"))
         return output
 
     def outfit_analyze_node(state):
@@ -166,6 +194,8 @@ def build_assistant_graph(
         if outfit_advice_service is None:
             return _not_ready("穿搭建议服务尚未接入。")
         analysis = outfit_analyze_service.analyze(state["image_keys"])
+        items = [_display_item(item["matches"][0]) for item in analysis.get("items", []) if item.get("matches")]
+        items = list({item["item_id"]: item for item in items}.values())
         overlay = prompt_overlay(state, "outfit_analyze")
         output = {
             "status": "ok",
@@ -178,6 +208,8 @@ def build_assistant_graph(
                 else outfit_advice_service.generate(analysis)
             ),
             "response_message": "穿搭分析完成。",
+            "display_items": items,
+            "conversation_state": _public_state(items, "outfit_analyze"),
         }
         if overlay:
             output["active_prompt"] = active_prompt(state, "outfit_analyze")
@@ -195,6 +227,8 @@ def build_assistant_graph(
             state.get("message", ""),
             conversation_state,
         )
+        if parsed.get("rewrite_scope") == "full":
+            return _not_ready("当前支持逐件调整，请说明先替换哪件单品；整套重新生成尚未接入。")
         if parsed.get("needs_clarification"):
             parsed.setdefault("replacement_candidates", [])
             return {
@@ -205,6 +239,15 @@ def build_assistant_graph(
                     "请补充明确的改搭要求。",
                 ),
             }
+        resolver = getattr(service, "resolver", None)
+        if parsed.get("bound_keep_item_ids") and not any(
+            parsed.get(key) for key in ("bound_exclude_item_ids", "exclude_categories", "prefer_categories", "prefer_colors", "style_shift")
+        ) and parsed.get("rewrite_scope") != "full":
+            locked = set(conversation_state.get("locked_item_ids", [])) | set(parsed["bound_keep_item_ids"])
+            updated = {**conversation_state, "locked_item_ids": sorted(locked), "last_intent": "outfit_revise"}
+            items = [_display_item(resolver(item_id)) for item_id in updated.get("selected_item_ids", []) if resolver]
+            return {"status": "ok", "result": parsed, "response_message": "已保留所选单品。",
+                    "conversation_state": updated, "display_items": items}
         if outfit_revise_candidate_service is None:
             return {
                 "status": "ok",
@@ -247,6 +290,22 @@ def build_assistant_graph(
             "result": result,
             "response_message": response_message,
         }
+        excluded = set(conversation_state.get("excluded_item_ids", [])) | set(parsed.get("bound_exclude_item_ids", []))
+        locked = set(conversation_state.get("locked_item_ids", [])) | set(parsed.get("bound_keep_item_ids", []))
+        current_ids = conversation_state.get("selected_item_ids", []) or [conversation_state.get("anchor_item_id")]
+        kept = [_display_item(resolver(item_id)) for item_id in current_ids
+                if item_id and item_id not in excluded and resolver]
+        replacements = [_display_item(item) for item in replacement_candidates
+                        if item["item_id"] not in excluded | locked]
+        if replacements:
+            chosen = replacements[0]
+            full = parsed.get("rewrite_scope") == "full"
+            kept = [item for item in kept if item["item_id"] in locked or
+                    (not full and item["category"] != chosen["category"])]
+            kept.append(chosen)
+        previous = {"locked_item_ids": sorted(locked), "excluded_item_ids": sorted(excluded)}
+        output.update(display_items=kept, conversation_state=_public_state(
+            kept, "outfit_revise", previous, [item["item_id"] for item in replacements]))
         if overlay:
             output["active_prompt"] = active_prompt(state, "outfit_revise")
         return output
