@@ -1,0 +1,9 @@
+export type Identity = {tenant_id:string;sub:string;roles:string[];exp:number};
+export type ConversationState = {anchor_item_id:string|null;candidate_item_ids:string[];selected_item_ids:string[];locked_item_ids:string[];excluded_item_ids:string[];item_metadata:{item_id:string;category:string;sub_category:string;colors:string[];style:string[]}[];last_intent:string|null};
+export type DisplayItem = {item_id:string;object_key:string;category:string;sub_category?:string;colors?:string[];style?:string[];name?:string};
+export type AssistantResponse = {thread_id:string;run_id:string;intent:string;status:string;message:string;result:Record<string,unknown>|null;conversation_state:ConversationState|null;display_items:DisplayItem[]};
+export type LocalMessage = {id:string;role:'user'|'assistant';text:string;imageKeys?:string[];response?:AssistantResponse};
+export type Conversation = {version:1;threadId:string;title:string;createdAt:string;updatedAt:string;messages:LocalMessage[];state:ConversationState|null};
+export type MemoryEvent = {event_id:string;kind:string;summary:string;status?:string;requires_confirmation:boolean;reversible_until:string|null;created_at:string};
+export type Ready = {status:string;warmed_up:boolean;data_status:string;postgres_ready:boolean;error:string|null};
+export type Asset = {image_key:string;content_url:string;expires_at:string};

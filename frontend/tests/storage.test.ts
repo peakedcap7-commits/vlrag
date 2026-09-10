@@ -1,0 +1,8 @@
+import {test} from 'node:test';
+import assert from 'node:assert/strict';
+import {decodeIdentity,readConversations,serializeConversations,storageKey,newConversation} from '../src/storage.ts';
+const identity={tenant_id:'11111111-1111-1111-1111-111111111111',sub:'22222222-2222-2222-2222-222222222222',roles:['user'],exp:Math.floor(Date.now()/1000)+3600};
+const token=(claims:object)=>`header.${Buffer.from(JSON.stringify(claims)).toString('base64url')}.signature`;
+test('令牌解析拒绝过期与缺失身份，隔离本地会话键',()=>{assert.deepEqual(decodeIdentity(token(identity)),identity);assert.throws(()=>decodeIdentity(token({...identity,exp:0})));assert.throws(()=>decodeIdentity(token({exp:identity.exp})));assert.notEqual(storageKey(identity),storageKey({...identity,sub:'33333333-3333-3333-3333-333333333333'}));assert.notEqual(storageKey(identity),storageKey({...identity,tenant_id:'33333333-3333-3333-3333-333333333333'}));});
+test('损坏或旧版会话安全回退，正常数据可恢复',()=>{assert.deepEqual(readConversations('{broken'),[]);assert.deepEqual(readConversations(JSON.stringify({version:2,conversations:[]})),[]);const c=newConversation();assert.deepEqual(readConversations(JSON.stringify({version:1,conversations:[c]})),[c]);});
+test('持久化只保留用户可见结果，不保留内部证据或临时图片地址',()=>{const c=newConversation();c.messages.push({id:'m',role:'assistant',text:'建议',response:{thread_id:c.threadId,run_id:'run',status:'ok',intent:'outfit_analyze',message:'建议',conversation_state:null,display_items:[],result:{summary:'简约搭配',graph_evidence:'private',content_url:'/api/assets/content/secret'}}});const saved=serializeConversations([c]);assert.ok(saved.includes('简约搭配'));assert.ok(!saved.includes('private'));assert.ok(!saved.includes('/api/assets/content/'));});
