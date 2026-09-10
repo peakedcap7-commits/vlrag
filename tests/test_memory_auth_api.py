@@ -353,6 +353,8 @@ def test_worker_logs_only_safe_job_failure_fields(caplog):
     }
     worker = object.__new__(MemoryWorker)
     worker.claim = lambda: job
+    worker.maintenance_url = ''
+    worker.memory = type('Memory', (), dict(write_enabled=True, semantic_enabled=True, episodic_enabled=True, procedural_enabled=True))()
 
     def fail(*_args):
         raise ValueError("secret")
@@ -442,8 +444,8 @@ def test_prompt_management_uses_controlled_database_functions():
     assert "memory.complete_memory_job" in worker
     assert "UPDATE memory.memory_jobs" not in worker
     assert "FROM memory.procedural_prompt_active" not in worker
-    assert "ON CONFLICT (tenant_id,user_id,dimension,lower(value),polarity)" in worker
-    assert "DO UPDATE SET context=EXCLUDED.context" in worker
+    assert "enable_updates=True" in worker
+    assert "supersedes_memory_id" in worker
     assert "ON CONFLICT (tenant_id,prompt_key,content_hash) DO NOTHING" in worker
     for flag in (
         "read_enabled=MEMORY_READ_ENABLED",

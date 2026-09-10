@@ -8,6 +8,8 @@ from uuid import uuid4
 
 from fastapi import HTTPException
 
+from src.memory_events import MemoryEventsMixin, lock_owner
+
 POSITIVE_FEEDBACK = frozenset({"accepted", "saved", "purchased", "thumbs_up"})
 PROMPT_KEYS = frozenset({"outfit_analyze", "outfit_revise"})
 
@@ -66,7 +68,7 @@ class NullMemoryService:
         return False
 
 
-class MemoryService:
+class MemoryService(MemoryEventsMixin):
     """直接复用九张已批准表；不增加 repository/factory。"""
 
     enabled = True
@@ -171,7 +173,7 @@ class MemoryService:
         run_id = run_id or uuid4()
         now = _now()
         expires_at = now + timedelta(days=30)
-        conversation_state = payload.get("conversation_state") or {}
+        conversation_state = state.get("conversation_state") or payload.get("conversation_state") or {}
         with self.transaction(identity) as cursor:
             cursor.execute(
                 "INSERT INTO memory.assistant_threads "
@@ -211,7 +213,8 @@ class MemoryService:
                     expires_at,
                 ),
             )
-            if state["status"] == "ok" and self.write_enabled and self.semantic_enabled:
+            if (state["status"] == "ok" and self.write_enabled and self.semantic_enabled
+                    and getattr(state['intent'], 'value', state['intent']) != 'unsupported'):
                 self._enqueue(
                     cursor,
                     identity.tenant_id,
@@ -304,12 +307,26 @@ class MemoryService:
 
     def delete_memory(self, identity, memory_id):
         with self.transaction(identity) as cursor:
+            lock_owner(cursor, identity)
             cursor.execute(
                 "UPDATE memory.semantic_memories SET status='deleted',embedding=NULL,deleted_at=now(),updated_at=now() "
                 "WHERE tenant_id=%s AND memory_id=%s AND user_id=%s AND status<>'deleted' RETURNING 'semantic' kind",
                 (identity.tenant_id, memory_id, identity.user_id),
             )
             row = cursor.fetchone()
+            if row is not None:
+                cursor.execute(
+                    "UPDATE memory.semantic_memories SET status='deleted',embedding=NULL,deleted_at=now(),updated_at=now() "
+                    "WHERE tenant_id=%s AND user_id=%s AND status IN ('active','pending','superseded') "
+                    "AND (dimension,lower(value)) IN (SELECT dimension,lower(value) FROM memory.semantic_memories "
+                    "WHERE tenant_id=%s AND memory_id=%s)",
+                    (identity.tenant_id,identity.user_id,identity.tenant_id,memory_id))
+                cursor.execute(
+                    "UPDATE memory.memory_events SET status='expired',decided_at=now() "
+                    "WHERE tenant_id=%s AND user_id=%s AND status IN ('open','confirmed') "
+                    "AND semantic_memory_id IN (SELECT memory_id FROM memory.semantic_memories WHERE tenant_id=%s "
+                    "AND user_id=%s AND status='deleted')",
+                    (identity.tenant_id,identity.user_id,identity.tenant_id,identity.user_id))
             if row is None:
                 cursor.execute(
                     "UPDATE memory.episodic_memories SET status='deleted',embedding=NULL,deleted_at=now(),updated_at=now() "

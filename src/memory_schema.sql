@@ -1456,4 +1456,110 @@ GRANT EXECUTE ON FUNCTION memory.mark_expired_memories(timestamptz)
 GRANT EXECUTE ON FUNCTION memory.purge_expired_rows(timestamptz, interval)
     TO shopping_memory_maintenance;
 
+-- 前端记忆交互迁移：旧约束名称由 PostgreSQL 自动分配，按定义识别。
+ALTER TABLE memory.semantic_memories ADD COLUMN IF NOT EXISTS revision bigint NOT NULL DEFAULT 1;
+ALTER TABLE memory.semantic_memories ADD COLUMN IF NOT EXISTS supersedes_memory_id uuid;
+DO $$ DECLARE c record; BEGIN
+    FOR c IN SELECT conname FROM pg_constraint
+        WHERE conrelid='memory.semantic_memories'::regclass AND contype='c'
+        AND pg_get_constraintdef(oid) LIKE '%status%'
+    LOOP EXECUTE format('ALTER TABLE memory.semantic_memories DROP CONSTRAINT %I', c.conname); END LOOP;
+END $$;
+UPDATE memory.semantic_memories SET embedding=NULL,deleted_at=coalesce(deleted_at,updated_at)
+WHERE status IN ('superseded','deleted') AND (embedding IS NOT NULL OR deleted_at IS NULL);
+ALTER TABLE memory.semantic_memories ADD CONSTRAINT semantic_state_check CHECK (
+    (status='active' AND embedding IS NOT NULL AND deleted_at IS NULL) OR
+    (status='pending' AND embedding IS NULL AND deleted_at IS NULL AND expires_at IS NOT NULL
+        AND expires_at<=created_at+interval '7 days') OR
+    (status IN ('superseded','deleted') AND embedding IS NULL AND deleted_at IS NOT NULL));
+DO $$ BEGIN
+    IF NOT EXISTS (SELECT FROM pg_constraint WHERE conrelid='memory.semantic_memories'::regclass AND conname='semantic_revision_positive') THEN
+        ALTER TABLE memory.semantic_memories ADD CONSTRAINT semantic_revision_positive CHECK (revision>0);
+        ALTER TABLE memory.semantic_memories ADD CONSTRAINT semantic_previous_fk FOREIGN KEY (tenant_id,supersedes_memory_id)
+            REFERENCES memory.semantic_memories(tenant_id,memory_id) ON DELETE SET NULL (supersedes_memory_id);
+    END IF;
+END $$;
+CREATE OR REPLACE FUNCTION memory.bump_semantic_revision() RETURNS trigger
+LANGUAGE plpgsql SET search_path=pg_catalog,memory AS $$ BEGIN
+    NEW.revision=OLD.revision+1; RETURN NEW;
+END $$;
+DROP TRIGGER IF EXISTS semantic_revision ON memory.semantic_memories;
+CREATE TRIGGER semantic_revision BEFORE UPDATE ON memory.semantic_memories
+FOR EACH ROW EXECUTE FUNCTION memory.bump_semantic_revision();
+
+CREATE TABLE IF NOT EXISTS memory.memory_events (
+    tenant_id uuid NOT NULL, event_id uuid NOT NULL, user_id uuid NOT NULL,
+    kind text NOT NULL CHECK (kind IN ('semantic_saved','semantic_confirmation_required','episodic_saved')),
+    status text NOT NULL DEFAULT 'open' CHECK (status IN ('open','confirmed','rejected','undone','expired')),
+    semantic_memory_id uuid, expected_memory_revision bigint, expected_previous_revision bigint,
+    episodic_memory_id uuid, summary text NOT NULL CHECK (btrim(summary)<>''),
+    reversible_until timestamptz, decided_at timestamptz,
+    created_at timestamptz NOT NULL DEFAULT now(), expires_at timestamptz NOT NULL,
+    PRIMARY KEY (tenant_id,event_id),
+    FOREIGN KEY (tenant_id,semantic_memory_id) REFERENCES memory.semantic_memories(tenant_id,memory_id) ON DELETE CASCADE,
+    FOREIGN KEY (tenant_id,episodic_memory_id) REFERENCES memory.episodic_memories(tenant_id,memory_id) ON DELETE CASCADE,
+    CHECK ((kind='episodic_saved' AND episodic_memory_id IS NOT NULL AND semantic_memory_id IS NULL AND expected_memory_revision IS NULL)
+        OR (kind<>'episodic_saved' AND semantic_memory_id IS NOT NULL AND episodic_memory_id IS NULL AND expected_memory_revision>0)),
+    CHECK (expected_previous_revision IS NULL OR expected_previous_revision>0)
+);
+CREATE INDEX IF NOT EXISTS memory_events_cursor_idx ON memory.memory_events(tenant_id,user_id,created_at,event_id);
+CREATE INDEX IF NOT EXISTS memory_events_expiry_idx ON memory.memory_events(expires_at);
+CREATE INDEX IF NOT EXISTS memory_events_open_idx ON memory.memory_events(tenant_id,user_id) WHERE status='open';
+ALTER TABLE memory.memory_events ENABLE ROW LEVEL SECURITY;
+ALTER TABLE memory.memory_events FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS memory_owner_all ON memory.memory_events;
+CREATE POLICY memory_owner_all ON memory.memory_events FOR ALL TO shopping_memory_owner USING(true) WITH CHECK(true);
+DROP POLICY IF EXISTS events_api_all ON memory.memory_events;
+CREATE POLICY events_api_all ON memory.memory_events FOR ALL TO shopping_memory_api
+USING(tenant_id=memory.current_tenant_id() AND user_id=memory.current_user_id())
+WITH CHECK(tenant_id=memory.current_tenant_id() AND user_id=memory.current_user_id());
+DROP POLICY IF EXISTS events_worker_all ON memory.memory_events;
+CREATE POLICY events_worker_all ON memory.memory_events FOR ALL TO shopping_memory_worker
+USING(tenant_id=memory.current_tenant_id() AND user_id=memory.current_user_id() AND memory.current_app_role()='worker')
+WITH CHECK(tenant_id=memory.current_tenant_id() AND user_id=memory.current_user_id() AND memory.current_app_role()='worker'
+    AND EXISTS (SELECT FROM memory.memory_jobs j WHERE j.tenant_id=memory.current_tenant_id()
+        AND j.user_id=memory.current_user_id() AND j.status='running' AND j.locked_by=memory.current_worker_id()));
+GRANT SELECT,INSERT,UPDATE ON memory.memory_events TO shopping_memory_api,shopping_memory_worker;
+GRANT UPDATE(revision,expires_at) ON memory.semantic_memories TO shopping_memory_api;
+DROP POLICY IF EXISTS runs_admin_select ON memory.assistant_runs;
+CREATE POLICY runs_admin_select ON memory.assistant_runs FOR SELECT TO shopping_memory_api
+USING(tenant_id=memory.current_tenant_id() AND memory.current_app_role()='tenant_admin');
+DROP POLICY IF EXISTS feedback_admin_select ON memory.assistant_feedback;
+CREATE POLICY feedback_admin_select ON memory.assistant_feedback FOR SELECT TO shopping_memory_api
+USING(tenant_id=memory.current_tenant_id() AND memory.current_app_role()='tenant_admin');
+DROP POLICY IF EXISTS episodic_own_api_all ON memory.episodic_memories;
+CREATE POLICY episodic_own_api_all ON memory.episodic_memories FOR ALL TO shopping_memory_api
+USING(tenant_id=memory.current_tenant_id() AND owner_user_id=memory.current_user_id() AND scope='user')
+WITH CHECK(tenant_id=memory.current_tenant_id() AND owner_user_id=memory.current_user_id() AND scope='user');
+REVOKE ALL ON FUNCTION memory.bump_semantic_revision() FROM PUBLIC;
+
+CREATE OR REPLACE FUNCTION memory.run_memory_maintenance() RETURNS jsonb
+LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog,memory,public AS $$
+DECLARE owner_row record; result jsonb;
+BEGIN
+    IF NOT pg_try_advisory_xact_lock(hashtextextended('memory-maintenance',0)) THEN RETURN '{"busy":true}'::jsonb; END IF;
+    -- 与确认、撤销及提取使用同一用户锁，回收不会穿过正在执行的状态变更。
+    FOR owner_row IN SELECT DISTINCT tenant_id,user_id FROM memory.semantic_memories ORDER BY tenant_id,user_id LOOP
+        PERFORM pg_advisory_xact_lock(hashtextextended(owner_row.tenant_id::text||':'||owner_row.user_id::text,0));
+    END LOOP;
+    UPDATE memory.semantic_memories SET status='deleted',embedding=NULL,deleted_at=now(),updated_at=now()
+        WHERE status IN ('active','pending') AND expires_at<=now();
+    UPDATE memory.memory_events SET status='expired',decided_at=now()
+        WHERE status IN ('open','confirmed') AND expires_at<=now();
+    PERFORM memory.mark_expired_memories(now());
+    DELETE FROM memory.semantic_memories s WHERE s.status IN ('deleted','superseded')
+        AND s.deleted_at<=now()-interval '7 days'
+        AND NOT EXISTS(SELECT FROM memory.semantic_memories n JOIN memory.memory_events e
+            ON e.tenant_id=n.tenant_id AND e.semantic_memory_id=n.memory_id
+            WHERE n.tenant_id=s.tenant_id AND n.supersedes_memory_id=s.memory_id
+            AND e.status IN ('open','confirmed') AND e.reversible_until>now());
+    DELETE FROM memory.memory_events WHERE expires_at<=now()-interval '7 days';
+    result=memory.purge_expired_rows(now(),interval '7 days');
+    RETURN result;
+END $$;
+REVOKE ALL ON FUNCTION memory.run_memory_maintenance() FROM PUBLIC;
+REVOKE EXECUTE ON FUNCTION memory.mark_expired_memories(timestamptz),
+    memory.purge_expired_rows(timestamptz,interval),memory.reclaim_memory_jobs(interval) FROM shopping_memory_maintenance;
+GRANT EXECUTE ON FUNCTION memory.run_memory_maintenance() TO shopping_memory_maintenance;
+
 COMMIT;

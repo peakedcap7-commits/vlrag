@@ -3,14 +3,17 @@
 import argparse
 import json
 import logging
+import os
 import re
 import time
-from uuid import UUID, uuid4
+from typing import Literal
+from uuid import UUID, uuid4, uuid5
 
 from pydantic import BaseModel, ConfigDict, Field
 
 from src.auth import Identity
 from src.memory import MemoryService, _vector, content_hash, validate_prompt_overlay
+from src.memory_events import audit, cap_memories, lock_owner
 
 logger = logging.getLogger("shopping_qna.memory_worker")
 
@@ -32,6 +35,9 @@ class PreferenceMemory(BaseModel):
     polarity: int = Field(ge=-1, le=1)
     context: str | None = Field(default=None, max_length=500)
     confidence: float = Field(ge=0, le=1)
+    evidence: str = Field(default='', max_length=500)
+    durability: Literal['explicit', 'inferred', 'temporary'] = 'inferred'
+    sensitive: bool = False
 
 
 class EpisodeMemory(BaseModel):
@@ -69,15 +75,19 @@ class MemoryWorker:
         self.poller_url = poller_url
         self.worker_id = worker_id or uuid4()
         self._connect = psycopg.connect
+        self.maintenance_url = os.getenv('MEMORY_MAINTENANCE_DATABASE_URL', '')
+        self._next_maintenance = 0.0
         self.semantic_manager = create_memory_manager(
             llm,
             schemas=[PreferenceMemory],
             instructions=(
-                "只抽取用户明确表达且可长期复用的穿搭偏好。dimension 只能为 "
+                "提取用户可长期复用的穿搭偏好。dimension 只能为 "
                 "color/style/category/scene/constraint；polarity 只能为 -1 或 1。"
-                "忽略临时指令、敏感信息、商品标识、图片键和推测。"
+                "evidence逐字引用用户原话，durability区分explicit明确长期偏好、inferred推断、temporary临时指令。"
+                "尺码、身体特征、预算标记sensitive=true；忽略联系方式、商品标识和图片键。"
+                "参考existing更新冲突偏好，保留其ID；只返回本次新增或改变的记忆。"
             ),
-            enable_updates=False,
+            enable_updates=True,
             enable_deletes=False,
         )
         self.episode_manager = create_memory_manager(
@@ -103,6 +113,7 @@ class MemoryWorker:
                 return dict(zip(names, row))
 
     def run_once(self):
+        self.maintain()
         job = self.claim()
         if job is None:
             return False
@@ -112,11 +123,13 @@ class MemoryWorker:
             roles=frozenset(),
         )
         try:
-            {
-                "semantic_extract": self._semantic,
-                "episodic_extract": self._episodic,
-                "procedural_optimize": self._procedural,
-            }[job["job_type"]](identity, job)
+            enabled, handler = {
+                'semantic_extract': (self.memory.semantic_enabled, self._semantic),
+                'episodic_extract': (self.memory.episodic_enabled, self._episodic),
+                'procedural_optimize': (self.memory.procedural_enabled, self._procedural),
+            }[job['job_type']]
+            if self.memory.write_enabled and enabled:
+                handler(identity, job)
         except Exception as exc:
             error_code = (
                 re.sub(r"[^a-z0-9_]", "_", type(exc).__name__.lower())[:64]
@@ -137,6 +150,17 @@ class MemoryWorker:
             self._finish(identity, job, None)
         return True
 
+    def maintain(self):
+        if not self.maintenance_url or time.monotonic() < self._next_maintenance:
+            return
+        try:
+            with self._connect(self.maintenance_url) as connection, connection.cursor() as cursor:
+                cursor.execute('SELECT memory.run_memory_maintenance()')
+            self._next_maintenance = time.monotonic() + 86400
+        except Exception as exc:
+            logger.warning('memory_maintenance_failed error_type=%s', type(exc).__name__)
+            self._next_maintenance = time.monotonic() + 300
+
     def _finish(self, identity, job, error_code):
         with self.memory.transaction(identity, "worker", self.worker_id) as cursor:
             if error_code:
@@ -156,34 +180,77 @@ class MemoryWorker:
     def _semantic(self, identity, job):
         payload = job["payload"] if isinstance(job["payload"], dict) else json.loads(job["payload"])
         message = str(payload.get("message", ""))[:2000]
-        output = self.semantic_manager.invoke({"messages": [{"role": "user", "content": message}]})
-        dimensions = {"color", "style", "category", "scene", "constraint"}
-        values = [
-            item.model_copy(
-                update={
-                    "value": _redact(item.value),
-                    "context": _redact(item.context) if item.context else None,
-                }
-            )
-            for item in _contents(output, PreferenceMemory)
-            if item.dimension in dimensions
-            and item.polarity in {-1, 1}
-            and _redact(item.value) == item.value
-        ]
-        if not values:
-            return
-        vectors = self.memory.embeddings.embed_documents([f"{item.dimension} {item.value} {item.context or ''}" for item in values])
         with self.memory.transaction(identity, "worker", self.worker_id) as cursor:
-            for item, embedding in zip(values, vectors):
+            cursor.execute("SELECT memory_id,dimension,value,polarity,context,confidence,revision FROM memory.semantic_memories "
+                           "WHERE tenant_id=%s AND user_id=%s AND status='active' AND (expires_at IS NULL OR expires_at>now()) "
+                           "ORDER BY updated_at DESC LIMIT 100", (identity.tenant_id,identity.user_id))
+            existing = {str(row['memory_id']):row for row in cursor.fetchall()}
+        output = self.semantic_manager.invoke({
+            'messages':[{'role':'user','content':message}],
+            'existing':[(key,'PreferenceMemory',{k:v for k,v in row.items() if k not in ('memory_id','revision')})
+                        for key,row in existing.items()]})
+        for extracted in output:
+            values = _contents([extracted], PreferenceMemory)
+            if not values:
+                continue
+            item = values[0]
+            if item.dimension not in {'color','style','category','scene','constraint'} or item.polarity not in {-1,1}:
+                continue
+            if item.durability == 'temporary' or _redact(item.value) != item.value:
+                continue
+            if re.search(r'今天|这次|本次|明天|暂时', message) and not re.search(r'一直|长期|平时|通常|以后|记住', message):
+                continue
+            old = existing.get(str(getattr(extracted,'id','')))
+            if old is None:
+                # 精确反转无需模型猜ID；只有本次读到的记录能成为前版本。
+                old = next((r for r in existing.values() if r['dimension']==item.dimension
+                            and r['value'].casefold()==item.value.strip().casefold()),None)
+            if old and all(old[k]==getattr(item,k) for k in ('dimension','value','polarity','context')):
+                continue
+            sensitive = item.sensitive or bool(re.search(r'尺码|身高|体重|胸围|腰围|臀围|预算|收入',item.value+' '+(item.context or '')+' '+message))
+            explicit = item.durability=='explicit' and bool(item.evidence) and item.evidence in message
+            pending = sensitive or not explicit
+            vector = None if pending else _vector(self.memory.embeddings.embed_query(f'{item.dimension} {item.value} {item.context or ""}'))
+            # 重放ID依赖候选内容，不依赖模型返回顺序。
+            memory_id = uuid5(UUID(str(job['job_id'])),json.dumps(
+                [item.dimension,item.value.strip(),item.polarity,item.context],ensure_ascii=False))
+            with self.memory.transaction(identity,'worker',self.worker_id) as cursor:
+                lock_owner(cursor,identity)
+                cursor.execute('SELECT 1 FROM memory.semantic_memories WHERE tenant_id=%s AND memory_id=%s', (identity.tenant_id,memory_id))
+                if cursor.fetchone():
+                    continue
+                previous_revision = None
+                if old:
+                    cursor.execute("SELECT revision FROM memory.semantic_memories WHERE tenant_id=%s AND user_id=%s AND memory_id=%s "
+                                   "AND revision=%s AND status='active' AND (expires_at IS NULL OR expires_at>now())",
+                                   (identity.tenant_id,identity.user_id,old['memory_id'],old['revision']))
+                    if not cursor.fetchone():
+                        raise ValueError('semantic_existing_changed')
+                    previous_revision = old['revision']
+                    if not pending:
+                        cursor.execute("UPDATE memory.semantic_memories SET status='superseded',embedding=NULL,deleted_at=now(),updated_at=now() "
+                                       "WHERE tenant_id=%s AND memory_id=%s RETURNING revision",(identity.tenant_id,old['memory_id']))
+                        previous_revision = cursor.fetchone()['revision']
+                else:
+                    cursor.execute("SELECT 1 FROM memory.semantic_memories WHERE tenant_id=%s AND user_id=%s AND dimension=%s "
+                                   "AND lower(value)=lower(%s) AND status='active'",(identity.tenant_id,identity.user_id,item.dimension,item.value.strip()))
+                    if cursor.fetchone():
+                        raise ValueError('semantic_concurrent_insert')
                 cursor.execute(
                     "INSERT INTO memory.semantic_memories "
-                    "(tenant_id,memory_id,user_id,dimension,value,polarity,context,confidence,source_run_id,embedding,status) "
-                    "VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s::vector,'active') "
-                    "ON CONFLICT (tenant_id,user_id,dimension,lower(value),polarity) WHERE status='active' "
-                    "DO UPDATE SET context=EXCLUDED.context,confidence=EXCLUDED.confidence,"
-                    "source_run_id=EXCLUDED.source_run_id,embedding=EXCLUDED.embedding,updated_at=now()",
-                    (identity.tenant_id, uuid4(), identity.user_id, item.dimension, item.value.strip(), item.polarity, item.context, item.confidence, job.get("source_run_id"), _vector(embedding)),
-                )
+                    "(tenant_id,memory_id,user_id,dimension,value,polarity,context,confidence,source_run_id,embedding,status,supersedes_memory_id,expires_at) "
+                    "VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s::vector,%s,%s,CASE WHEN %s THEN now()+interval '7 days' ELSE NULL END)",
+                    (identity.tenant_id,memory_id,identity.user_id,item.dimension,item.value.strip(),item.polarity,
+                     _redact(item.context) if item.context else None,item.confidence,job.get('source_run_id'),vector,
+                     'pending' if pending else 'active',old['memory_id'] if old else None,pending))
+                cursor.execute("INSERT INTO memory.memory_events(tenant_id,event_id,user_id,kind,semantic_memory_id,expected_memory_revision,"
+                               "expected_previous_revision,summary,reversible_until,expires_at) "
+                               "VALUES(%s,%s,%s,%s,%s,1,%s,%s,CASE WHEN %s THEN NULL ELSE now()+interval '7 days' END,now()+interval '7 days')",
+                               (identity.tenant_id,uuid5(memory_id,'event'),identity.user_id,
+                                'semantic_confirmation_required' if pending else 'semantic_saved',memory_id,previous_revision,
+                                ('偏好：' if item.polarity>0 else '不偏好：')+item.value,pending))
+                audit(cursor,identity,'memory.propose' if pending else 'memory.save',memory_id,'worker')
+                cap_memories(cursor,identity)
 
     def _episodic(self, identity, job):
         payload = job["payload"] if isinstance(job["payload"], dict) else json.loads(job["payload"])
@@ -234,9 +301,14 @@ class MemoryWorker:
                     "source_feedback_id,source_job_id,source_item_index,embedding,status,expires_at) "
                     "VALUES (%s,%s,%s,'user',%s,%s,%s,%s,%s,%s,%s,%s::vector,'active',now()+interval '180 days') "
                     "ON CONFLICT (tenant_id,source_job_id,scope,source_item_index) "
-                    "WHERE source_job_id IS NOT NULL DO NOTHING",
+                    "WHERE source_job_id IS NOT NULL DO NOTHING RETURNING memory_id",
                     (identity.tenant_id, uuid4(), identity.user_id, item.observation, item.action, item.result, job["source_run_id"], row["feedback_id"], job["job_id"], item_index, _vector(embedding)),
                 )
+                inserted = cursor.fetchone()
+                if inserted:
+                    cursor.execute("INSERT INTO memory.memory_events(tenant_id,event_id,user_id,kind,episodic_memory_id,summary,reversible_until,expires_at) "
+                                   "VALUES(%s,%s,%s,'episodic_saved',%s,%s,now()+interval '7 days',now()+interval '7 days')",
+                                   (identity.tenant_id,uuid4(),identity.user_id,inserted['memory_id'],item.result))
         tenant_identity = Identity(identity.tenant_id, None, frozenset())
         with self.memory.transaction(tenant_identity, "worker", self.worker_id) as cursor:
             for item_index, (item, embedding) in enumerate(zip(episodes, vectors)):
