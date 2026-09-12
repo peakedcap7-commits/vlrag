@@ -344,12 +344,14 @@ CREATE UNIQUE INDEX IF NOT EXISTS semantic_active_dedupe_idx
     WHERE status = 'active';
 CREATE INDEX IF NOT EXISTS semantic_owner_status_idx
     ON memory.semantic_memories (tenant_id, user_id, status);
-CREATE INDEX IF NOT EXISTS semantic_expires_idx
+DROP INDEX IF EXISTS memory.semantic_expires_idx;
+CREATE INDEX semantic_expires_idx
     ON memory.semantic_memories (expires_at)
-    WHERE expires_at IS NOT NULL AND status = 'active';
-CREATE INDEX IF NOT EXISTS semantic_deleted_idx
+    WHERE expires_at IS NOT NULL AND status IN ('pending', 'active');
+DROP INDEX IF EXISTS memory.semantic_deleted_idx;
+CREATE INDEX semantic_deleted_idx
     ON memory.semantic_memories (deleted_at)
-    WHERE status = 'deleted';
+    WHERE status IN ('deleted', 'superseded');
 CREATE INDEX IF NOT EXISTS episodic_owner_status_idx
     ON memory.episodic_memories (tenant_id, owner_user_id, status);
 CREATE INDEX IF NOT EXISTS episodic_shared_status_idx
@@ -1502,9 +1504,19 @@ CREATE TABLE IF NOT EXISTS memory.memory_events (
         OR (kind<>'episodic_saved' AND semantic_memory_id IS NOT NULL AND episodic_memory_id IS NULL AND expected_memory_revision>0)),
     CHECK (expected_previous_revision IS NULL OR expected_previous_revision>0)
 );
+DO $$ BEGIN
+    IF NOT EXISTS (SELECT FROM pg_constraint WHERE conrelid='memory.memory_events'::regclass AND conname='memory_events_time_check') THEN
+        ALTER TABLE memory.memory_events ADD CONSTRAINT memory_events_time_check CHECK (
+            expires_at>created_at AND
+            (reversible_until IS NULL OR (reversible_until>created_at AND reversible_until<=expires_at)) AND
+            ((status='open' AND decided_at IS NULL) OR (status<>'open' AND decided_at IS NOT NULL)));
+    END IF;
+END $$;
 CREATE INDEX IF NOT EXISTS memory_events_cursor_idx ON memory.memory_events(tenant_id,user_id,created_at,event_id);
 CREATE INDEX IF NOT EXISTS memory_events_expiry_idx ON memory.memory_events(expires_at);
 CREATE INDEX IF NOT EXISTS memory_events_open_idx ON memory.memory_events(tenant_id,user_id) WHERE status='open';
+CREATE INDEX IF NOT EXISTS memory_events_semantic_fk_idx ON memory.memory_events(tenant_id,semantic_memory_id) WHERE semantic_memory_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS memory_events_episodic_fk_idx ON memory.memory_events(tenant_id,episodic_memory_id) WHERE episodic_memory_id IS NOT NULL;
 ALTER TABLE memory.memory_events ENABLE ROW LEVEL SECURITY;
 ALTER TABLE memory.memory_events FORCE ROW LEVEL SECURITY;
 DROP POLICY IF EXISTS memory_owner_all ON memory.memory_events;
@@ -1544,6 +1556,20 @@ BEGIN
     END LOOP;
     UPDATE memory.semantic_memories SET status='deleted',embedding=NULL,deleted_at=now(),updated_at=now()
         WHERE status IN ('active','pending') AND expires_at<=now();
+    WITH ranked AS (
+        SELECT tenant_id,memory_id,row_number() OVER (
+            PARTITION BY tenant_id,user_id,status
+            ORDER BY confidence DESC,updated_at DESC,memory_id DESC) AS position,
+            CASE status WHEN 'active' THEN 100 ELSE 20 END AS capacity
+        FROM memory.semantic_memories WHERE status IN ('active','pending')
+    )
+    UPDATE memory.semantic_memories s
+        SET status='deleted',embedding=NULL,deleted_at=now(),updated_at=now()
+        FROM ranked r WHERE s.tenant_id=r.tenant_id AND s.memory_id=r.memory_id AND r.position>r.capacity;
+    UPDATE memory.memory_events e SET status='expired',decided_at=now()
+        WHERE e.status IN ('open','confirmed') AND EXISTS (
+            SELECT FROM memory.semantic_memories s WHERE s.tenant_id=e.tenant_id
+            AND s.memory_id=e.semantic_memory_id AND s.status='deleted');
     UPDATE memory.memory_events SET status='expired',decided_at=now()
         WHERE status IN ('open','confirmed') AND expires_at<=now();
     PERFORM memory.mark_expired_memories(now());

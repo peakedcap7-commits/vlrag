@@ -8,4 +8,5 @@ data
 docs
 tests
 work
+frontend
 *.pyc

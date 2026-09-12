@@ -1,6 +1,6 @@
 # ShoppingQnA 多模态穿搭问答助手
 
-ShoppingQnA 是一个面向潮流穿搭场景的 AI 应用后端。它把商品图像、中文语义检索、Neo4j outfit 关系和大模型建议生成串起来，用来支持“单品推荐”“多件单品搭配判断”和“对话式改搭”。
+ShoppingQnA 是一个面向潮流穿搭场景的 AI 应用。它把对话式 React 工作台、商品图像、中文语义检索、Neo4j outfit 关系、大模型建议和 LangMem 记忆串起来，用来支持“单品推荐”“多件单品搭配判断”和“对话式改搭”。
 
 ## Docker 一键开发部署
 
@@ -10,7 +10,7 @@ ShoppingQnA 是一个面向潮流穿搭场景的 AI 应用后端。它把商品�
 docker compose up --build
 ```
 
-Compose 会幂等启动 PostgreSQL/pgvector、Neo4j、MinIO、API、LangMem worker，并导入三件项目自有的合成演示商品。首次启动需要下载 Chinese-CLIP 模型并建立向量索引，因此会明显慢于后续启动。`GET /health` 只表示进程存活；`GET /health/ready` 中的 `data_status=ready` 才表示演示索引可用。
+Compose 会幂等启动 React/Nginx 前端、PostgreSQL/pgvector、Neo4j、MinIO、API、LangMem worker，并导入三件项目自有的合成演示商品。首次启动需要下载 Chinese-CLIP 模型并建立向量索引，因此会明显慢于后续启动。打开 `http://localhost:3000` 使用前端；`GET /health` 只表示 API 进程存活，`GET /health/ready` 中的 `data_status=ready` 才表示演示索引可用。
 
 业务接口均要求本地开发 JWT。容器启动后在项目目录生成一个 token：
 
@@ -20,11 +20,11 @@ docker compose run --rm api shopping-dev-token \
   --user-id 22222222-2222-2222-2222-222222222222
 ```
 
-管理员 token 额外传 `--role tenant_admin`。身份、租户和角色只从签名后的 token 读取；项目不提供登录或发 token 的 HTTP 接口。此认证层仅供开发部署，生产环境必须换成正式 OIDC/JWT 验证。
+管理员 token 额外传 `--role tenant_admin`。把输出的 token 粘贴到前端首次进入页即可；token 仅存于当前标签页的 `sessionStorage`。身份、租户和角色只从签名后的 token 读取；项目不提供登录或发 token 的 HTTP 接口。此认证层仅供开发部署，生产环境必须换成正式 OIDC/JWT 验证。
 
-记忆能力包括：thread 级短期状态、用户级语义偏好、正向反馈驱动的情景案例、需要管理员审批/激活的租户级程序提示。可用 `MEMORY_READ_ENABLED`、`MEMORY_WRITE_ENABLED` 及三类记忆开关做功能回滚；不要用 `docker compose down -v` 作为普通回滚命令。
+记忆能力包括：thread 级短期状态、用户级语义偏好、正向反馈驱动的情景案例、需要管理员审批/激活的租户级程序提示。明确长期偏好自动保存并可在 7 天内撤销；推断偏好和尺码、身体特征、预算等敏感偏好先进入待确认状态；明确的“忘掉……偏好”会删除该偏好且不恢复历史版本。所有读写按 tenant/user 隔离。可用 `MEMORY_READ_ENABLED`、`MEMORY_WRITE_ENABLED` 及三类记忆开关做功能回滚；不要用 `docker compose down -v` 作为普通回滚命令。
 
-当前版本重点是后端闭环：数据、向量库、图数据库、FastAPI 接口和 LangGraph 编排都已接入；正式前端仍未开始。
+前端对话保存在当前浏览器，穿搭结果直接显示在消息中的杂志式平铺画布；用户上传图经 FastAPI 写入 MinIO `uploads/` 前缀并在 24 小时后过期。管理员入口为 `http://localhost:3000/admin`。
 
 ## 当前能力
 
@@ -34,6 +34,8 @@ docker compose run --rm api shopping-dev-token \
 | M2 多件单品搭配判断 | `POST /assistant/message`，传入 2～4 张图片 key | 已接入 |
 | M3 对话式改搭 | `POST /assistant/message`，传入 message 和 conversation_state | 已接入 |
 | M4 场景穿搭生成 | `POST /assistant/message` | 暂缓，返回 not_ready |
+| 对话前端 | `http://localhost:3000` | 已接入 |
+| 记忆确认/撤销 | `GET /assistant/memory-events` | 已接入 |
 
 ## 技术栈
 
@@ -327,7 +329,7 @@ curl -X POST http://127.0.0.1:8000/assistant/message `
 最近一次提交前验证结果：
 
 ```text
-167 passed, 6 skipped
+218 passed, 21 skipped, 150 subtests passed
 ```
 
 依赖检查：
@@ -344,10 +346,9 @@ git diff --check
 
 ## 当前限制
 
-- 正式前端尚未实现。
 - 当前 Polyvore 只导入了演示切片，不是完整商品库。
 - M4 场景穿搭生成暂缓。
-- 用户上传图的鉴权、清理任务和生产级 TTL 策略还未实现。
+- 本地 JWT、上传图和 24 小时 TTL 仅适合开发部署；生产环境必须换成正式身份提供方、对象存储策略和密钥管理。
 - 部分路径仍是本机开发路径，迁移环境时需要调整 `.env` 和数据路径。
 - qwen-turbo 是建议表达核心，已设置超时、一次重试和格式修复；最终失败才会走安全 fallback。
 

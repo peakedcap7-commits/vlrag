@@ -20,4 +20,4 @@ RUN curl --fail --location --retry 5 --retry-delay 2 --retry-all-errors \
     && pip install ".[graph]"
 
 ENV PYTHONPATH=/app
-CMD ["uvicorn", "src.api.app:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "1"]
+CMD ["uvicorn", "src.api.app:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "1", "--no-access-log"]

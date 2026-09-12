@@ -59,6 +59,15 @@
 - 配置发现、并行调度、App 活动可见、禁止递归派生、只读约束和 Git 零污染均有实际证据。
 - 多 Agent 开发基础设施验收通过。
 
+## 2026-09-12 前端、记忆治理与一键部署收尾
+
+- Python 全量回归：218 passed、21 skipped、150 subtests；跳过项是需要真实 PostgreSQL/pgvector DSN 的条件测试。
+- 前端：3 项单元测试通过，TypeScript 与 Vite 生产构建通过；浏览器 smoke 覆盖 JWT、演示选品、消息内穿搭画布、记忆确认/撤销、主题、360px 布局、键盘抽屉、普通用户拒绝及管理员数据页。
+- Compose 静态配置校验通过；API 镜像关闭访问日志，Nginx 对短期图片令牌路径关闭访问日志；MinIO lifecycle 初始化具备幂等单元测试。
+- UI finish gate 最终结论 PASS，无 P0/P1/P2 阻塞项。
+- 记忆表结构与治理最终技术评审 PASS，无 P0/P1/P2；过期与回收索引覆盖 pending/active 及 deleted/superseded，明确遗忘命令的否定、转述和假设句不会触发删除。
+- 当前机器的 Docker Desktop 4.86 因残留 `dockerInference` 运行时端点启动崩溃，故本次改动后的容器实机复验暂未完成；不把静态 Compose 校验包装成实机通过。
+
 ## 2026-08-24 记忆、JWT 与 Docker 验收记录
 
 - 本地回归：199 passed、11 skipped、117 subtests；最终关键门禁 43 passed、5 个需真实 DSN 的条件测试。

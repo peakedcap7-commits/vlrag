@@ -12,7 +12,7 @@ from fastapi import HTTPException
 
 from src.auth import Identity
 from src.memory import MemoryService
-from src.memory_events import _cursor, cap_memories, lock_owner
+from src.memory_events import _cursor
 from src.memory_migrate import LOGIN_ROLE_ENV, migrate
 from src.memory_worker import MemoryWorker, PreferenceMemory
 
@@ -22,6 +22,17 @@ class CursorTest(unittest.TestCase):
         for cursor in ('bad', 'W10=', 'WyIyMDI2LTAxLTAxIiwiYmFkIl0='):
             with self.assertRaises(HTTPException):
                 _cursor(cursor)
+
+    def test_negated_forget_request_is_not_executed(self):
+        service = MemoryService.__new__(MemoryService)
+        service.list_memories = Mock(side_effect=AssertionError('must not read'))
+        for message in (
+            '不要忘记我喜欢黑色的偏好',
+            '不要帮我忘掉我喜欢黑色的偏好',
+            '我不想让你忘掉我喜欢黑色的偏好',
+            '如果我说“忘掉我喜欢黑色的偏好”，你会怎样？',
+        ):
+            self.assertIsNone(service.forget_from_message(None, message))
 
 
 @unittest.skipUnless(os.getenv('MEMORY_EVENTS_TEST_DSN'), '需要独立 *_test PostgreSQL')
@@ -193,9 +204,9 @@ class MemoryEventsIntegrationTest(unittest.TestCase):
                 db.execute("INSERT INTO memory.semantic_memories(tenant_id,memory_id,user_id,dimension,value,polarity,confidence,status,expires_at) "
                            "VALUES(%s,%s,%s,'style',%s,1,.1,'pending',now()+interval '7 days')",
                            (self.identity.tenant_id,uuid4(),self.identity.user_id,f'pending{i}'))
+        with self.connect(self.maintenance) as db:
+            db.execute('SELECT memory.run_memory_maintenance()')
         with self.api.transaction(self.identity) as cursor:
-            lock_owner(cursor,self.identity)
-            cap_memories(cursor,self.identity)
             cursor.execute("SELECT status,count(*) AS n FROM memory.semantic_memories WHERE tenant_id=%s AND user_id=%s GROUP BY status",
                            (self.identity.tenant_id,self.identity.user_id))
             counts={r['status']:r['n'] for r in cursor.fetchall()}
@@ -217,6 +228,17 @@ class MemoryEventsIntegrationTest(unittest.TestCase):
             self.api.decide_memory_event(self.identity,event['event_id'],'confirm')
         self.embed.embed_query.side_effect=None
         self.assertEqual(self.rows(),[])
+
+    def test_pending_confirmation_rejects_a_new_active_duplicate(self):
+        event,_=self.save(pending=True)
+        with self.connect(self.dsn) as db:
+            db.execute(
+                "INSERT INTO memory.semantic_memories(tenant_id,memory_id,user_id,dimension,value,polarity,confidence,embedding,status) "
+                "VALUES(%s,%s,%s,'color','黑色',1,.9,%s::vector,'active')",
+                (self.identity.tenant_id,uuid4(),self.identity.user_id,'['+','.join(['1']+['0']*1023)+']'))
+        with self.assertRaises(HTTPException) as caught:
+            self.api.decide_memory_event(self.identity,event['event_id'],'confirm')
+        self.assertEqual(caught.exception.status_code,409)
 
 
 if __name__=='__main__':

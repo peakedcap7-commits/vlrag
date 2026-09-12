@@ -1,6 +1,6 @@
 # ShoppingQnA 当前项目状态
 
-- 最后更新时间：2026-08-24
+- 最后更新时间：2026-09-11
 - 对应提交：以当前 Git HEAD 为准
 - 维护者：主 Agent
 - 状态：已生效
@@ -16,6 +16,7 @@
 - LangGraph 规则意图路由与流程编排
 - 图检索抽象接口（Neo4j 二期占位）
 - pytest 测试代码
+- React 19 / TypeScript / Vite / Nginx 对话前端
 
 ## 已有模块
 
@@ -47,15 +48,15 @@
 
 ## 当前限制
 
-- 尚未形成正式前端目录。
+- 正式前端位于 `frontend/`，通过 Nginx 同源代理 `/api`，默认由 Compose 暴露在 3000 端口。
 - M2 多件搭配分析与 M3 对话式改搭已明确进入后续实施；M4 暂缓。
 - `/assistant/message` 已冻结 M2/M3 最小请求与响应 schema；M2-A/B/C/D 已实现多图匹配、初版评分和用户建议，M3-A+/B 已实现词典标准化、状态绑定、追问与文本 Chroma 替换候选召回，但尚未执行最终替换或搭配验证。
-- 用户图片只能写入 MinIO 临时前缀 `uploads/{session_id}/{image_id}.jpg`；开发期 TTL 为 24 小时，生产前补鉴权和清理任务。用户图不得进入商品 Chroma collection 或 Polyvore 商品库。
+- 用户图片只能写入 MinIO 临时前缀 `uploads/{thread_id}/{image_id}.jpg`；开发期 TTL 为 24 小时，已接入 JWT、tenant/user/thread metadata 校验、同源短期内容令牌与 MinIO lifecycle。用户图不得进入商品 Chroma collection 或 Polyvore 商品库。
 - M2-A/B 对用户图片仅执行内存中的临时 Chinese-CLIP 编码和 `products_image_cnclip_v1` 只读查询，不保存用户图向量。
 - M2-C 只读查询不同输入图 Top-3 候选之间的 Neo4j outfit 共现，并按图关系40、品类20、颜色20、风格20生成0～100分和证据等级；不调用模型生成建议。
 - M2-D 只调用文本 LLM 组织用户建议；正式 API 不暴露 graph_evidence、rule_scores、item_id 或 outfit_id 等内部技术字段。
 - 模型运行时默认不自动预热；可调用 `POST /warmup` 手动预热，或设置 `ENABLE_MODEL_WARMUP=true` 在 FastAPI 生命周期自动预热。`GET /health/ready` 返回就绪状态、耗时和安全错误类型。
-- 关系型数据库表结构尚未引入。
+- PostgreSQL/pgvector 已引入 `memory` schema：10 张业务表、强制 RLS、独立 API/worker/poller/maintenance/migrator 角色，并通过事务锁、revision 和约束保护记忆决策。
 - Chroma 数据和处理后数据属于本地产物，不进入 Git。
 - Polyvore 232 条图切片已写入 `products_image_cnclip_v1` 与 `products_text_v3_v1`，两个 collection 的字符串 `item_id` 集合完全一致。
 - 无 VLM 的 232 条基础中文检索清单位于 `data/processed/polyvore_neo4j_items_retrieval.jsonl`，只使用类别与显式颜色等基础 metadata，不推断材质或功能属性。
@@ -81,3 +82,5 @@
 - M2/M3 advice 的 qwen-turbo 显式使用 12 秒超时和一次传输重试；首次 JSON/schema 失败最多执行一次格式修复，最终失败返回仅基于既有事实的安全 fallback，并记录完整诊断字段。
 - 本机开发环境通过 `CHINESE_CLIP_MODEL` 指向已缓存模型目录，避免预热时回退到 HuggingFace 远程解析；`.env.example` 仅提供路径占位示例。
 - 已加入开发 JWT、多租户短期/语义/情景/程序记忆、LangMem worker 与 Docker Compose；真实 PG16/pgvector RLS、任务恢复和 CPU-only 镜像构建已验证。完整演示索引仍要求有效 `DASHSCOPE_API_KEY`。
+- LangMem worker 已启用已有语义记忆更新建议；明确长期偏好自动生效并提供 7 日撤销，推断或敏感偏好先确认，明确遗忘只删除且不恢复历史。事件决策由数据库 revision、用户级事务锁和 RLS 保护。
+- 浏览器端仅持久化公开会话结果，JWT 只存当前标签页 `sessionStorage`；普通用户不提供记忆管理页，确认、撤销与遗忘均在日常对话中完成。

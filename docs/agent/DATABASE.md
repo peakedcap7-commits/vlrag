@@ -1,6 +1,6 @@
 # ShoppingQnA 数据存储规则
 
-- 最后更新时间：2026-08-24
+- 最后更新时间：2026-09-12
 - 对应提交：以当前 Git HEAD 为准
 - 维护者：主 Agent，database 负责评审
 - 状态：已生效
@@ -16,9 +16,9 @@
 - JSON：data/processed/ 保存处理后的商品数据，本地生成，不进入 Git；resolver 合并 `polyvore_neo4j_items_manifest.jsonl`、sample manifest 与 enriched JSONL，其中 enriched 优先；232 条基础中文检索记录保存在 `polyvore_neo4j_items_retrieval.jsonl`。
 - MinIO：Neo4j 40 套切片对应的 232 个 Item 图片均保存为 `shopping-qna/polyvore/items/{item_id}.jpg`。
 - 用户上传图片使用隔离前缀 `uploads/{session_id}/{image_id}.jpg`，由服务端生成对象键并校验会话归属；开发期 TTL 为 24 小时。
-- 用户上传图片只允许临时保存和临时向量化，不写入 `products_text_v3_v1`、`products_image_cnclip_v1` 或 Polyvore 商品库。清理任务与生产鉴权尚未实现，必须在上线前补齐。
+- 用户上传图片只允许临时保存和临时向量化，不写入 `products_text_v3_v1`、`products_image_cnclip_v1` 或 Polyvore 商品库。Compose 已为 `uploads/` 配置 24 小时 lifecycle；本地 JWT 仍仅适合开发部署，生产上线前必须替换为正式身份提供方。
 - M2-A/B 使用 `products_image_cnclip_v1` 执行只读 Top-3 相似查询；用户图片向量只存在于请求内存，当前存储数量和 schema 均未改变。
-- PostgreSQL/pgvector 新增九张 `memory` schema 业务表，全部 FORCE RLS；API、worker、poller、maintenance 与 migrator 使用独立角色。
+- PostgreSQL/pgvector 新增十张 `memory` schema 业务表，全部 FORCE RLS；API、worker、poller、maintenance 与 migrator 使用独立角色。
 - `memory_jobs` 使用 10 分钟租约和最多 3 次领取；情景记忆以 `(tenant_id, source_job_id, scope, source_item_index)` 部分唯一键保证重放幂等。
 - M2-C 使用 Neo4j 只读查询跨输入图候选的共享 `Outfit`，未增加节点、关系、约束或索引，也未改变现有计数。
 - M3-B 只读查询 `products_text_v3_v1` 召回替换候选，不写入任何 collection，也不查询 Neo4j。
@@ -28,9 +28,11 @@
   - 唯一约束：`Item.item_id`、`Outfit.outfit_id`。
   - 当前数据：232 个 Item、40 个 Outfit、233 条关系；重复执行相同导入不会增加计数。
 
-## 未接入存储
+## 记忆存储边界
 
-- 关系型数据库：当前尚未引入，因此不存在已批准的业务表结构。
+- `assistant_threads`、`assistant_runs` 保存短期对话状态；`semantic_memories` 保存长期语义偏好；`episodic_memories` 保存情景摘要；`procedural_prompt_versions` 与 `procedural_prompt_active` 保存受管理员审批的程序记忆。
+- `memory_events` 只保存需要用户感知或操作的确认、撤销与删除事件；`memory_jobs` 驱动异步提取，`audit_events` 保存安全审计，`assistant_feedback` 保存反馈信号。
+- 所有用户数据键均包含 `tenant_id`，用户级数据同时包含 `user_id`；数据库强制 RLS 是最终隔离边界，应用过滤不能替代 RLS。
 
 ## 设计原则
 

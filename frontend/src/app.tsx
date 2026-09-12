@@ -304,6 +304,8 @@ function Workspace({
   const abort = useRef<AbortController | null>(null);
   const end = useRef<HTMLDivElement>(null);
   const input = useRef<HTMLTextAreaElement>(null);
+  const sidebar = useRef<HTMLElement>(null);
+  const menuButton = useRef<HTMLButtonElement>(null);
   const conversation = conversations.find((c) => c.threadId === active)!;
   useEffect(() => {
     try {
@@ -314,7 +316,7 @@ function Workspace({
   }, [conversations, key]);
   useEffect(() => () => abort.current?.abort(), []);
   useEffect(() => {
-    if (busy) {
+    if (busy && !matchMedia("(prefers-reduced-motion: reduce)").matches) {
       const id = setInterval(
         () => setWaitIndex((i) => (i + 1) % waiting.length),
         4000,
@@ -323,8 +325,28 @@ function Workspace({
     }
   }, [busy]);
   useEffect(() => {
-    end.current?.scrollIntoView({ block: "end" });
+    const latest = conversation.messages.at(-1);
+    if (latest?.role === "assistant") {
+      document.getElementById(`message-${latest.id}`)?.scrollIntoView({ block: "start" });
+    } else if (busy) {
+      end.current?.scrollIntoView({ block: "nearest" });
+    }
   }, [conversation.messages.length, busy]);
+  useEffect(() => {
+    if (!menu) return;
+    const focusTimer = setTimeout(
+      () => sidebar.current?.querySelector<HTMLElement>(".new-chat:not(:disabled)")?.focus(),
+      220,
+    );
+    const escape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") closeMenu();
+    };
+    document.addEventListener("keydown", escape);
+    return () => {
+      clearTimeout(focusTimer);
+      document.removeEventListener("keydown", escape);
+    };
+  }, [menu]);
   async function health() {
     try {
       setReady(await request<Ready>("/health/ready", token));
@@ -373,13 +395,17 @@ function Workspace({
     setText("");
     setImages([]);
     setUploads([]);
-    setMenu(false);
+    if (menu) closeMenu();
     setError("");
   }
   function create() {
     const c = newConversation();
     setConversations((old) => [c, ...old]);
     choose(c.threadId);
+  }
+  function closeMenu() {
+    setMenu(false);
+    requestAnimationFrame(() => menuButton.current?.focus());
   }
   async function upload(id: string, file: File) {
     setUploads((old) =>
@@ -577,10 +603,10 @@ function Workspace({
         <button
           className="drawer-backdrop"
           aria-label="关闭会话栏"
-          onClick={() => setMenu(false)}
+          onClick={closeMenu}
         />
       )}
-      <aside className={`sidebar ${menu ? "open" : ""}`}>
+      <aside id="conversation-drawer" ref={sidebar} className={`sidebar ${menu ? "open" : ""}`}>
         <a className="brand" href="/">
           SQ
           <span>
@@ -674,11 +700,14 @@ function Workspace({
           </div>
         </div>
       </aside>
-      <main className="workspace">
+      <main className="workspace" inert={menu || undefined}>
         <header className="topbar">
           <button
+            ref={menuButton}
             className="mobile-menu"
             aria-label="打开会话栏"
+            aria-controls="conversation-drawer"
+            aria-expanded={menu}
             onClick={() => setMenu(true)}
           >
             ☰
@@ -722,9 +751,9 @@ function Workspace({
               <p className="welcome-note">上传自己的单品，或选择演示商品体验</p>
             </section>
           ) : (
-            <section className="messages" aria-label="穿搭对话">
+            <section className="messages" aria-label="穿搭对话" aria-live="polite" aria-relevant="additions">
               {conversation.messages.map((m) => (
-                <article key={m.id} className={`message ${m.role}`}>
+                <article id={`message-${m.id}`} key={m.id} className={`message ${m.role}`}>
                   <div className="message-label">
                     {m.role === "user" ? "YOU" : "SQ / 造型编辑"}
                   </div>
@@ -774,9 +803,10 @@ function Workspace({
             </section>
           )}
           {busy && (
-            <div className="waiting" role="status">
+            <div className="waiting">
+              <span className="sr-only" role="status">正在准备穿搭结果。</span>
               <span className="waiting-dot" />
-              <span>
+              <span aria-hidden="true">
                 {waiting[waitIndex]}
                 <small>等待提示，并非实时执行进度</small>
               </span>
@@ -789,7 +819,7 @@ function Workspace({
                   !["rejected", "undone", "expired"].includes(e.status || ""),
               )
               .map((e) => (
-                <div className="memory-notice" key={e.event_id}>
+                <div className="memory-notice" role="status" key={e.event_id}>
                   <span>✧</span>
                   <p>
                     {e.requires_confirmation ? "要记住这个偏好吗？" : "已记住"}
@@ -930,11 +960,6 @@ function Workspace({
             <div className="composer-tools">
               <label
                 className={`upload-button ${busy ? "disabled" : ""}`}
-                tabIndex={0}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter")
-                    e.currentTarget.querySelector("input")?.click();
-                }}
               >
                 ＋ 添加图片
                 <input

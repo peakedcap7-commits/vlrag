@@ -1,14 +1,287 @@
-import {useEffect,useState} from 'react';
-import {request} from './api';
-import type {Identity} from './types';
-type Row={run_id?:string;memory_id?:string;summary?:string;input_summary?:string;output_summary?:string;observation?:string;action?:string;result?:string;created_at:string};
-type Version={version_id:string;content:string;status:string;is_active:boolean;current_generation:number|null;created_at:string};
-export default function Admin({token,identity,onLogout}:{token:string;identity:Identity;onLogout:()=>void}){
-  const [key,setKey]=useState('outfit_analyze');const [versions,setVersions]=useState<Version[]>([]);const [episodes,setEpisodes]=useState<Row[]>([]);const [runs,setRuns]=useState<Row[]>([]);const [selected,setSelected]=useState<string[]>([]);const [cursor,setCursor]=useState({runs:'',episodes:''});const [error,setError]=useState('');const [notice,setNotice]=useState('');const [busy,setBusy]=useState(false);const allowed=identity.roles.includes('tenant_admin');
-  async function load(){if(!allowed)return;setError('');try{const [v,e,r]=await Promise.all([request<Version[]>(`/admin/prompts/${key}/versions`,token),request<{items:Row[];cursor:string}>('/admin/episodes?status=pending&limit=20',token),request<{items:Row[];cursor:string}>('/admin/runs?feedback=positive&limit=20',token)]);setVersions(v);setEpisodes(e.items);setRuns(r.items);setCursor({runs:r.cursor,episodes:e.cursor});}catch(e){setError(e instanceof Error?e.message:'读取管理数据失败');}}
-  useEffect(()=>{void load();},[key,token]);
-  async function mutate(path:string,body:unknown={}){setBusy(true);setError('');setNotice('');try{await request(path,token,body);setNotice('操作成功。优化任务将在后台执行，请稍后刷新。');await load();}catch(e){setError(e instanceof Error?e.message:'操作失败');}finally{setBusy(false);}}
-  async function more(type:'runs'|'episodes'){setBusy(true);try{const data=await request<{items:Row[];cursor:string}>(`/admin/${type}?${type==='runs'?'feedback=positive':'status=pending'}&limit=20&cursor=${encodeURIComponent(cursor[type])}`,token);if(type==='runs')setRuns(old=>[...old,...data.items]);else setEpisodes(old=>[...old,...data.items]);setCursor(old=>({...old,[type]:data.cursor}));}catch(e){setError(e instanceof Error?e.message:'加载失败');}finally{setBusy(false);}}
-  const generation=versions.find(v=>v.is_active)?.current_generation||0;
-  return <main className="admin"><header><a className="brand" href="/">SQ<span>返回造型编辑室</span></a><button onClick={onLogout}>退出身份</button></header>{!allowed?<section><span className="eyebrow">403 / ACCESS RESTRICTED</span><h1>此处仅限租户管理员</h1><p>请使用具备 tenant_admin 角色的开发令牌。</p></section>:<><span className="eyebrow">TENANT EDITORIAL DESK</span><h1>编辑管理台</h1><p>审核共享搭配经验，管理造型助手的表达规则。</p>{error&&<p className="error" role="alert">{error}</p>}{notice&&<p className="notice" role="status">{notice}</p>}<div className="admin-toolbar"><label>程序类型 <select value={key} onChange={e=>setKey(e.target.value)} disabled={busy}><option value="outfit_analyze">搭配分析</option><option value="outfit_revise">对话改搭</option></select></label><button disabled={busy} onClick={()=>void load()}>刷新状态 ↻</button></div><section><h2>程序记忆版本</h2>{!versions.length&&<p className="empty">尚无程序版本。选择下方正向反馈记录生成首个草稿。</p>}{versions.map(v=><article className="admin-card" key={v.version_id}><div className="admin-card-header"><strong>{v.is_active?'当前生效':v.status==='draft'?'待审批草稿':v.status}</strong><time>{new Date(v.created_at).toLocaleString()}</time></div><p className="version-content">{v.content}</p><div className="admin-actions">{v.status==='draft'&&<button disabled={busy} onClick={()=>void mutate(`/admin/prompts/${key}/versions/${v.version_id}/approve`)}>批准版本</button>}{!v.is_active&&v.status==='approved'&&<><button disabled={busy} onClick={()=>void mutate(`/admin/prompts/${key}/versions/${v.version_id}/activate`,{expected_generation:generation})}>激活版本</button>{generation>0&&<button disabled={busy} onClick={()=>void mutate(`/admin/prompts/${key}/rollback`,{version_id:v.version_id,expected_generation:generation})}>回滚到此版本</button>}</>}</div></article>)}</section><section><h2>从成功对话中优化</h2><p>最多选择 20 条正向反馈记录，生成待审批草稿。</p>{!runs.length&&<p className="empty">暂无带正向反馈的对话。</p>}{runs.map(r=><label className="run-row" key={r.run_id}><input type="checkbox" checked={selected.includes(r.run_id!)} disabled={busy||(!selected.includes(r.run_id!)&&selected.length>=20)} onChange={e=>setSelected(old=>e.target.checked?[...old,r.run_id!]:old.filter(id=>id!==r.run_id))}/><span>{r.input_summary||r.summary||'穿搭对话'}<small>{r.output_summary}</small><small>{new Date(r.created_at).toLocaleString()}</small></span></label>)}{cursor.runs&&<button disabled={busy} onClick={()=>void more('runs')}>加载更多记录</button>}<button className="primary" disabled={busy||!selected.length} onClick={()=>void mutate(`/admin/prompts/${key}/optimize`,{run_ids:selected})}>生成优化草稿（{selected.length}）</button></section><section><h2>共享情景审批</h2><p>批准后，该搭配经验将供当前租户使用。</p>{!episodes.length&&<p className="empty">暂无待审批的共享情景。</p>}{episodes.map(e=><article className="admin-card" key={e.memory_id}><h3>{e.summary||e.observation||'成功搭配经验'}</h3><p>{e.action}</p><p>{e.result}</p><button disabled={busy} onClick={()=>void mutate(`/admin/episodes/${e.memory_id}/approve`)}>批准共享</button></article>)}{cursor.episodes&&<button disabled={busy} onClick={()=>void more('episodes')}>加载更多情景</button>}</section></>}</main>;
+import { useEffect, useState } from "react";
+import { request } from "./api";
+import type { Identity } from "./types";
+type Row = {
+  run_id?: string;
+  memory_id?: string;
+  summary?: string;
+  input_summary?: unknown;
+  output_summary?: unknown;
+  observation?: string;
+  action?: string;
+  result?: string;
+  created_at: string;
+};
+type Version = {
+  version_id: string;
+  content: string;
+  status: string;
+  is_active: boolean;
+  current_generation: number | null;
+  created_at: string;
+};
+const text = (value: unknown) =>
+  typeof value === "string" ? value : value ? JSON.stringify(value) : "";
+export default function Admin({
+  token,
+  identity,
+  onLogout,
+}: {
+  token: string;
+  identity: Identity;
+  onLogout: () => void;
+}) {
+  const [key, setKey] = useState("outfit_analyze");
+  const [versions, setVersions] = useState<Version[]>([]);
+  const [episodes, setEpisodes] = useState<Row[]>([]);
+  const [runs, setRuns] = useState<Row[]>([]);
+  const [selected, setSelected] = useState<string[]>([]);
+  const [cursor, setCursor] = useState({ runs: "", episodes: "" });
+  const [error, setError] = useState("");
+  const [notice, setNotice] = useState("");
+  const [busy, setBusy] = useState(false);
+  const allowed = identity.roles.includes("tenant_admin");
+  async function load() {
+    if (!allowed) return;
+    setError("");
+    try {
+      const [v, e, r] = await Promise.all([
+        request<Version[]>(`/admin/prompts/${key}/versions`, token),
+        request<{ items: Row[]; cursor: string }>(
+          "/admin/episodes?status=pending&limit=20",
+          token,
+        ),
+        request<{ items: Row[]; cursor: string }>(
+          "/admin/runs?feedback=positive&limit=20",
+          token,
+        ),
+      ]);
+      setVersions(v);
+      setEpisodes(e.items);
+      setRuns(r.items);
+      setCursor({ runs: r.cursor, episodes: e.cursor });
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "读取管理数据失败");
+    }
+  }
+  useEffect(() => {
+    void load();
+  }, [key, token]);
+  async function mutate(path: string, body: unknown = {}) {
+    setBusy(true);
+    setError("");
+    setNotice("");
+    try {
+      await request(path, token, body);
+      setNotice("操作成功。优化任务将在后台执行，请稍后刷新。");
+      await load();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "操作失败");
+    } finally {
+      setBusy(false);
+    }
+  }
+  async function more(type: "runs" | "episodes") {
+    setBusy(true);
+    try {
+      const data = await request<{ items: Row[]; cursor: string }>(
+        `/admin/${type}?${type === "runs" ? "feedback=positive" : "status=pending"}&limit=20&cursor=${encodeURIComponent(cursor[type])}`,
+        token,
+      );
+      if (type === "runs") setRuns((old) => [...old, ...data.items]);
+      else setEpisodes((old) => [...old, ...data.items]);
+      setCursor((old) => ({ ...old, [type]: data.cursor }));
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "加载失败");
+    } finally {
+      setBusy(false);
+    }
+  }
+  const generation = versions.find((v) => v.is_active)?.current_generation || 0;
+  return (
+    <main className="admin">
+      <header>
+        <a className="brand" href="/">
+          SQ<span>返回造型编辑室</span>
+        </a>
+        <button onClick={onLogout}>退出身份</button>
+      </header>
+      {!allowed ? (
+        <section>
+          <span className="eyebrow">403 / ACCESS RESTRICTED</span>
+          <h1>此处仅限租户管理员</h1>
+          <p>请使用具备 tenant_admin 角色的开发令牌。</p>
+        </section>
+      ) : (
+        <>
+          <span className="eyebrow">TENANT EDITORIAL DESK</span>
+          <h1>编辑管理台</h1>
+          <p>审核共享搭配经验，管理造型助手的表达规则。</p>
+          {error && (
+            <p className="error" role="alert">
+              {error}
+            </p>
+          )}
+          {notice && (
+            <p className="notice" role="status">
+              {notice}
+            </p>
+          )}
+          <div className="admin-toolbar">
+            <label>
+              程序类型{" "}
+              <select
+                value={key}
+                onChange={(e) => setKey(e.target.value)}
+                disabled={busy}
+              >
+                <option value="outfit_analyze">搭配分析</option>
+                <option value="outfit_revise">对话改搭</option>
+              </select>
+            </label>
+            <button disabled={busy} onClick={() => void load()}>
+              刷新状态 ↻
+            </button>
+          </div>
+          <section>
+            <h2>程序记忆版本</h2>
+            {!versions.length && (
+              <p className="empty">
+                尚无程序版本。选择下方正向反馈记录生成首个草稿。
+              </p>
+            )}
+            {versions.map((v) => (
+              <article className="admin-card" key={v.version_id}>
+                <div className="admin-card-header">
+                  <strong>
+                    {v.is_active
+                      ? "当前生效"
+                      : v.status === "draft"
+                        ? "待审批草稿"
+                        : v.status}
+                  </strong>
+                  <time>{new Date(v.created_at).toLocaleString()}</time>
+                </div>
+                <p className="version-content">{v.content}</p>
+                <div className="admin-actions">
+                  {v.status === "draft" && (
+                    <button
+                      disabled={busy}
+                      onClick={() =>
+                        void mutate(
+                          `/admin/prompts/${key}/versions/${v.version_id}/approve`,
+                        )
+                      }
+                    >
+                      批准版本
+                    </button>
+                  )}
+                  {!v.is_active && v.status === "approved" && (
+                    <>
+                      <button
+                        disabled={busy}
+                        onClick={() =>
+                          void mutate(
+                            `/admin/prompts/${key}/versions/${v.version_id}/activate`,
+                            { expected_generation: generation },
+                          )
+                        }
+                      >
+                        激活版本
+                      </button>
+                      {generation > 0 && (
+                        <button
+                          disabled={busy}
+                          onClick={() =>
+                            void mutate(`/admin/prompts/${key}/rollback`, {
+                              version_id: v.version_id,
+                              expected_generation: generation,
+                            })
+                          }
+                        >
+                          回滚到此版本
+                        </button>
+                      )}
+                    </>
+                  )}
+                </div>
+              </article>
+            ))}
+          </section>
+          <section>
+            <h2>从成功对话中优化</h2>
+            <p>最多选择 20 条正向反馈记录，生成待审批草稿。</p>
+            {!runs.length && <p className="empty">暂无带正向反馈的对话。</p>}
+            {runs.map((r) => (
+              <label className="run-row" key={r.run_id}>
+                <input
+                  type="checkbox"
+                  checked={selected.includes(r.run_id!)}
+                  disabled={
+                    busy ||
+                    (!selected.includes(r.run_id!) && selected.length >= 20)
+                  }
+                  onChange={(e) =>
+                    setSelected((old) =>
+                      e.target.checked
+                        ? [...old, r.run_id!]
+                        : old.filter((id) => id !== r.run_id),
+                    )
+                  }
+                />
+                <span>
+                  {text(r.input_summary) || r.summary || "穿搭对话"}
+                  <small>{text(r.output_summary)}</small>
+                  <small>{new Date(r.created_at).toLocaleString()}</small>
+                </span>
+              </label>
+            ))}
+            {cursor.runs && (
+              <button disabled={busy} onClick={() => void more("runs")}>
+                加载更多记录
+              </button>
+            )}
+            <button
+              className="primary"
+              disabled={busy || !selected.length}
+              onClick={() =>
+                void mutate(`/admin/prompts/${key}/optimize`, {
+                  run_ids: selected,
+                })
+              }
+            >
+              生成优化草稿（{selected.length}）
+            </button>
+          </section>
+          <section>
+            <h2>共享情景审批</h2>
+            <p>批准后，该搭配经验将供当前租户使用。</p>
+            {!episodes.length && (
+              <p className="empty">暂无待审批的共享情景。</p>
+            )}
+            {episodes.map((e) => (
+              <article className="admin-card" key={e.memory_id}>
+                <h3>{e.summary || e.observation || "成功搭配经验"}</h3>
+                <p>{e.action}</p>
+                <p>{e.result}</p>
+                <button
+                  disabled={busy}
+                  onClick={() =>
+                    void mutate(`/admin/episodes/${e.memory_id}/approve`)
+                  }
+                >
+                  批准共享
+                </button>
+              </article>
+            ))}
+            {cursor.episodes && (
+              <button disabled={busy} onClick={() => void more("episodes")}>
+                加载更多情景
+              </button>
+            )}
+          </section>
+        </>
+      )}
+    </main>
+  );
 }

@@ -339,7 +339,7 @@ class MemorySchemaIntegrationTest(unittest.TestCase):
                 (thread_id,),
             )
 
-    def test_only_maintenance_has_reclaim_execute(self):
+    def test_maintenance_only_has_the_bounded_entrypoint(self):
         with (
             self.psycopg.connect(self.dsn) as connection,
             connection.cursor() as cursor,
@@ -356,10 +356,15 @@ class MemorySchemaIntegrationTest(unittest.TestCase):
                         'shopping_memory_maintenance',
                         'memory.reclaim_memory_jobs(interval)',
                         'EXECUTE'
+                    ),
+                    has_function_privilege(
+                        'shopping_memory_maintenance',
+                        'memory.run_memory_maintenance()',
+                        'EXECUTE'
                     )
                 """
             )
-            self.assertEqual(cursor.fetchone(), (False, True))
+            self.assertEqual(cursor.fetchone(), (False, False, True))
 
         with (
             self.psycopg.connect(self.dsn, autocommit=True) as connection,
@@ -374,8 +379,16 @@ class MemorySchemaIntegrationTest(unittest.TestCase):
             connection.cursor() as cursor,
         ):
             cursor.execute("SET LOCAL ROLE shopping_memory_maintenance")
-            cursor.execute("SELECT memory.reclaim_memory_jobs(interval '100 years')")
-            self.assertEqual(cursor.fetchone()[0], 0)
+            with self.assertRaises(self.psycopg.errors.InsufficientPrivilege):
+                cursor.execute("SELECT memory.reclaim_memory_jobs()")
+
+        with (
+            self.psycopg.connect(self.dsn) as connection,
+            connection.cursor() as cursor,
+        ):
+            cursor.execute("SET LOCAL ROLE shopping_memory_maintenance")
+            cursor.execute("SELECT memory.run_memory_maintenance()")
+            self.assertIsInstance(cursor.fetchone()[0], dict)
 
     def test_claim_recovers_crashed_jobs_and_stops_after_three_attempts(self):
         tenant_id, user_id = str(uuid4()), str(uuid4())

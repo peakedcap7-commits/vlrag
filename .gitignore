@@ -3,6 +3,10 @@ __pycache__/
 *.py[cod]
 *.egg-info/
 dist/
+node_modules/
+*.tsbuildinfo
+playwright-report/
+test-results/
 .pytest_cache/
 .venv/
 venv/

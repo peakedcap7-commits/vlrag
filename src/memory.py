@@ -457,7 +457,7 @@ def configured_memory_service(embeddings=None):
 
     if not DATABASE_URL:
         return NullMemoryService()
-    if embeddings is None and MEMORY_READ_ENABLED and (
+    if embeddings is None and (MEMORY_READ_ENABLED or MEMORY_WRITE_ENABLED) and (
         SEMANTIC_MEMORY_ENABLED or EPISODIC_MEMORY_ENABLED
     ):
         from src.embeddings.dashscope_emb import DashScopeEmbeddings

@@ -36,11 +36,11 @@ def lock_owner(cursor, identity):
                    (f'{identity.tenant_id}:{identity.user_id}',))
 
 
-def audit(cursor, identity, action, memory_id, actor='user'):
+def audit(cursor, identity, action, resource_id, actor='user', resource_type='semantic'):
     cursor.execute(
         "INSERT INTO memory.audit_events(tenant_id,event_id,actor_user_id,actor_type,action,resource_type,resource_id,details,expires_at) "
-        "VALUES(%s,%s,%s,%s,%s,'semantic',%s,'{}',now()+interval '365 days')",
-        (identity.tenant_id, uuid4(), identity.user_id, actor, action, str(memory_id)))
+        "VALUES(%s,%s,%s,%s,%s,%s,%s,'{}',now()+interval '365 days')",
+        (identity.tenant_id, uuid4(), identity.user_id, actor, action, resource_type, str(resource_id)))
 
 
 def cap_memories(cursor, identity):
@@ -152,6 +152,13 @@ class MemoryEventsMixin:
                 if cursor.rowcount != 1:
                     raise HTTPException(409, 'memory_changed')
             elif action == 'confirm':
+                if not previous:
+                    cursor.execute(
+                        "SELECT 1 FROM memory.semantic_memories WHERE tenant_id=%s AND user_id=%s "
+                        "AND dimension=%s AND lower(value)=lower(%s) AND status='active' AND memory_id<>%s",
+                        (identity.tenant_id, identity.user_id, current['dimension'], current['value'], current['memory_id']))
+                    if cursor.fetchone():
+                        raise HTTPException(409, 'memory_changed')
                 if previous:
                     cursor.execute("UPDATE memory.semantic_memories SET status='superseded',embedding=NULL,deleted_at=now(),updated_at=now() "
                                    "WHERE tenant_id=%s AND user_id=%s AND memory_id=%s RETURNING revision",
@@ -173,12 +180,17 @@ class MemoryEventsMixin:
             cursor.execute('UPDATE memory.memory_events SET status=%s,decided_at=now() WHERE tenant_id=%s AND event_id=%s RETURNING reversible_until',
                            (target,identity.tenant_id,event_id))
             reversible_until = cursor.fetchone()['reversible_until']
-            audit(cursor,identity,'memory.'+action,event_id)
+            resource_type = 'episodic' if event['kind'] == 'episodic_saved' else 'semantic'
+            resource_id = event['episodic_memory_id'] or event['semantic_memory_id']
+            audit(cursor,identity,'memory.'+action,resource_id,resource_type=resource_type)
             cap_memories(cursor,identity)
             return {'event_id':event_id,'status':target,'reversible_until':reversible_until}
 
     def forget_from_message(self, identity, message):
         # ponytail：只接受明确的遗忘请求和可定位的偏好；指代消解留给后续对话。
+        direct = r'^\s*(?:请(?:你)?\s*)?(?:麻烦(?:你)?\s*)?(?:帮我\s*)?(?:忘掉|忘记|删除)'
+        if not re.match(direct, message):
+            return None
         if not re.search(r'(忘掉|忘记|删除).*(偏好|记忆|喜欢|喜好)|(?:请)?(?:忘掉|忘记)(?:这个|这条|这些)', message):
             return None
         rows = self.list_memories(identity, 'semantic')

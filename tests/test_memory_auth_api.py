@@ -542,8 +542,8 @@ def test_compose_declares_required_services_and_no_redis_or_celery():
 
 def test_compose_builds_one_shared_application_image():
     compose = (Path(__file__).parents[1] / "compose.yaml").read_text(encoding="utf-8")
-    assert compose.count("image: shopping-qna-dev-app") == 4
-    assert compose.count("build: .") == 1
+    assert compose.count("image: shopping-qna-dev-app") == 5
+    assert compose.splitlines().count("    build: .") == 1
 
 
 def test_neo4j_container_only_receives_supported_auth_setting():

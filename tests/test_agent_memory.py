@@ -57,7 +57,7 @@ class AgentMemoryTest(unittest.TestCase):
         database = (MEMORY_DIR / "DATABASE.md").read_text(encoding="utf-8")
 
         self.assertIn("Chroma", project_state)
-        self.assertIn("尚未形成正式前端目录", project_state)
+        self.assertIn("正式前端位于 `frontend/`", project_state)
         self.assertIn("232 条图切片", project_state)
         self.assertIn("neo4j_outfit_provider", architecture)
         self.assertIn("232 个 Item、40 个 Outfit、233 条关系", database)
